@@ -1,12 +1,16 @@
-use core::{result};
-use std::fs::read_to_string;
-use std::io::{Error, ErrorKind};
+use core::result;
+use std::fs::read;
+use std::io::ErrorKind;
+
 use bitreader::{BitReader, BitReaderError};
 use bytes::BufMut;
-use log::{trace, debug, warn, error};
-use tokio::io::{AsyncReadExt, BufReader};
+use log::{debug, error, trace};
+use tokio::io::AsyncReadExt;
 use tokio::net::tcp::OwnedReadHalf;
-use crate::mqtt::{ConnectFlags, ControlPacketType, FixedHeader, Payload, Property, VariableHeader, QoSLevel, RetainHandling, TopicFilter, ReasonCode};
+use tokio::net::TcpStream;
+use tokio::sync::MutexGuard;
+
+use crate::mqtt::{ConnectFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, RetainHandling, TopicFilter, VariableHeader};
 
 pub type ReadResult<T> = result::Result<T, ReadError>;
 pub type DecodeResult<T> = result::Result<T, DecodeError>;
@@ -338,7 +342,7 @@ impl FixedHeaderDecoder {
         return Ok(remaining_length);
     }
 
-    async fn read_variable_byte_integer_as_buf(&self, reader: &mut OwnedReadHalf) -> DecodeResult<Vec<u8>> {
+    async fn read_variable_byte_integer_as_buf(&self, reader: &mut MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<Vec<u8>> {
         trace!("FixedHeaderDecoder::read_variable_byte_integer_from_stream");
         let mut multiplier: u64 = 1;
         let mut consumed_bytes = Vec::with_capacity(1);
@@ -368,7 +372,7 @@ impl FixedHeaderDecoder {
         return Ok(consumed_bytes);
     }
 
-    pub async fn decode_from_stream(&self, stream: &mut OwnedReadHalf) -> DecodeResult<FixedHeader> {
+    pub async fn decode_from_stream(&self, stream: &mut MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<FixedHeader> {
         debug!("FixedHeaderDecoder::decode_from_stream");
         let mut buffer = Vec::with_capacity(2);
         let first_byte = match stream.read_u8().await {
@@ -413,7 +417,7 @@ impl Decoder<FixedHeader> for FixedHeaderDecoder {
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<FixedHeader> {
         debug!("FixedHeaderDecoder::decode");
         let packet_type = self.read_packet_type(reader)?;
-        match packet_type {
+        return match packet_type {
             ControlPacketType::PUBLISH => {
                 let dup_flag = match self.read_bool(reader) {
                     Ok(result) => { result }
@@ -443,14 +447,14 @@ impl Decoder<FixedHeader> for FixedHeaderDecoder {
                 trace!("Extracted Retain Flag: {:?}", retain);
 
                 let remaining_length = self.read_remaining_length(reader)?;
-                return Ok(FixedHeader::from_publish(dup_flag, qos_level, retain, remaining_length));
+                Ok(FixedHeader::from_publish(dup_flag, qos_level, retain, remaining_length))
             }
             _ => {
                 let control_flags = self.read_control_flags(reader)?;
                 let remaining_length = self.read_remaining_length(reader)?;
-                return Ok(FixedHeader::new(packet_type, control_flags, remaining_length));
+                Ok(FixedHeader::new(packet_type, control_flags, remaining_length))
             }
-        }
+        };
     }
 }
 
@@ -762,7 +766,11 @@ impl Decoder<Option<VariableHeader>> for VariableHeaderDecoder {
             ControlPacketType::UNSUBACK => { None }
             ControlPacketType::PINGREQ => { None }
             ControlPacketType::PINGRESP => { None }
-            ControlPacketType::DISCONNECT => { None }
+            ControlPacketType::DISCONNECT => {
+                let reason_code = self.read_reason_code(reader)?;
+                let properties = property_decoder.decode(reader)?;
+                Some(VariableHeader::from_disconnect(reason_code, properties))
+            }
             ControlPacketType::AUTH => { None }
         });
     }

@@ -1,17 +1,20 @@
 use core::fmt;
+use std::borrow::BorrowMut;
 use std::io::ErrorKind;
 
-
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use bitreader::{BitReader};
-use bytes::{BytesMut};
-use log::{trace, debug, error};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::time::{Duration, Instant, timeout};
+use bitreader::BitReader;
+use bytes::BytesMut;
+use log::{debug, error, trace};
 use metrics::{gauge, register_gauge};
-use crate::mqtt::{ControlPacket};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
+use tokio::sync::MutexGuard;
+use tokio::time::Instant;
+
 use crate::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, VariableHeaderDecoder};
 use crate::encoder::{Encoder, EncodeResult, FixedHeaderEncoder, LengthCalculator, OptEncoder, PayloadEncoder, VariableHeaderEncoder};
+use crate::mqtt::ControlPacket;
 
 pub static CONNECTION_WRITE_MICROS: &str = "connection.write.micros";
 pub static CONNECTION_ENCODE_MICROS: &str = "connection.encode.micros";
@@ -54,8 +57,8 @@ pub async fn write_buffer(buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> Wri
     for i in buffer.clone() {
         trace!("Going to write: {:#04X?}", i );
     }
-    let mut buf_writer = BufWriter::new(stream);
-    match buf_writer.write(buffer).await {
+
+    match stream.write(buffer).await {
         Ok(result) => {
             trace!("{:?} bytes written to stream", result);
             gauge!(CONNECTION_WRITE_MICROS, now.elapsed().as_micros() as f64 );
@@ -66,7 +69,7 @@ pub async fn write_buffer(buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> Wri
         }
     };
     //Ok(())
-    match buf_writer.flush().await {
+    match stream.flush().await {
         Ok(_) => { Ok(()) }
         Err(e) => {
             error!("Can't flush buffered writer: {:?}", e);
@@ -75,14 +78,14 @@ pub async fn write_buffer(buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> Wri
     }
 }
 
-pub fn encode_packet(mut packet: &ControlPacket) -> EncodeResult<BytesMut> {
+pub fn encode_packet(packet: &ControlPacket) -> EncodeResult<BytesMut> {
     let now = Instant::now();
     debug!("Connection::encode_packet");
     trace!("Encoding packet: {:?} - {:?}", packet.fixed_header().packet_type(), packet);
     let mut calculated_remaining_length = 0;
 
     let mut payload_encoder = PayloadEncoder::new(packet.fixed_header().packet_type());
-    match packet.payload() {
+    match packet.payload_opt() {
         None => {}
         Some(payload) => {
             let remaining_length = payload_encoder.calculate_length(payload) as u64;
@@ -92,7 +95,7 @@ pub fn encode_packet(mut packet: &ControlPacket) -> EncodeResult<BytesMut> {
     }
 
     let mut variable_header_encoder = VariableHeaderEncoder::new(packet.fixed_header().packet_type());
-    match packet.variable_header() {
+    match packet.variable_header_opt() {
         None => {}
         Some(variable_header) => {
             let remaining_length = variable_header_encoder.calculate_length(variable_header) as u64;
@@ -107,13 +110,13 @@ pub fn encode_packet(mut packet: &ControlPacket) -> EncodeResult<BytesMut> {
     debug!("Control Packet Remaining Length: {:?}", calculated_remaining_length);
     let mut buffer = BytesMut::with_capacity(fixed_header_length + calculated_remaining_length as usize);
     fixed_header_encoder.encode(&(packet.fixed_header(), calculated_remaining_length), &mut buffer)?;
-    variable_header_encoder.encode_opt(packet.variable_header(), &mut buffer)?;
-    payload_encoder.encode_opt(packet.payload(), &mut buffer);
+    variable_header_encoder.encode_opt(packet.variable_header_opt(), &mut buffer)?;
+    payload_encoder.encode_opt(packet.payload_opt(), &mut buffer).expect("panic encode_opt");
     gauge!(CONNECTION_ENCODE_MICROS, now.elapsed().as_micros() as f64);
     Ok(buffer)
 }
 
-pub async fn read_packet(stream: &mut OwnedReadHalf)
+pub async fn read_packet(stream: MutexGuard<'_, OwnedReadHalf>)
                          -> DecodeResult<ControlPacket>
 {
     let now = Instant::now();
@@ -137,7 +140,7 @@ pub async fn read_packet(stream: &mut OwnedReadHalf)
 }
 
 
-async fn decode_packet(mut stream: &mut OwnedReadHalf) -> DecodeResult<ControlPacket> {
+async fn decode_packet(mut stream: MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<ControlPacket> {
     let now = Instant::now();
     debug!("MQTTConnection::decode_packet");
     //let mut buffer = BytesMut::with_capacity(3);

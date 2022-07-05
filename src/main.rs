@@ -1,26 +1,31 @@
-mod listener;
+#[macro_use]
+extern crate lazy_static;
+extern crate core;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use log4rs;
+use log::{info, warn};
+use metrics::{GaugeValue, Key, Recorder, Unit};
+use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_util::MetricKindMask;
+use tokio::sync::{mpsc, Mutex};
+
+use crate::broker::Broker;
+use crate::connection_handler::ConnectionHandler;
+use crate::topic_handler::TopicHandler;
+
+mod connection_handler;
 mod mqtt;
 mod decoder;
 mod broker;
 mod connection;
 mod encoder;
-mod tests;
 mod topic_handler;
 mod session;
-
-use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
-use log4rs;
-use log::{info, debug, trace, warn, error};
-use metrics::{GaugeValue, Key, Recorder, Unit, register_gauge};
-use metrics_exporter_prometheus::PrometheusBuilder;
-use tokio::sync::mpsc;
-use metrics_util::MetricKindMask;
-use tokio::sync::broadcast;
-use crate::broker::Broker;
-
-#[macro_use]
-extern crate lazy_static;
+mod tests;
 
 struct LogRecorder;
 
@@ -52,11 +57,14 @@ lazy_static! {
     };
 }
 
+pub fn init_logging() {
+    log4rs::init_file("config/log4rs.yaml", Default::default());
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    log4rs::init_file("config/log4rs.yaml", Default::default()).unwrap();
-
+    init_logging();
     let builder = PrometheusBuilder::new();
     builder
         .idle_timeout(
@@ -72,16 +80,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 
     info!("MQTT SERVER");
-    let (listener2broker_packet_tx, listener2broker_packet_rx) = mpsc::channel(32);
-    let (listener2broker_client_tx_tx, listener2broker_client_tx_rx) = mpsc::channel(32);
-    let mut listener = listener::Listener::new(1883, listener2broker_packet_tx, listener2broker_client_tx_tx).await;
+    let (listener2broker_tx, listener2broker_rx) = mpsc::channel(1000);
+    let (broker2listener_tx, broker2listener_rx) = mpsc::channel(1000);
+    let client2write_half = Arc::new(Mutex::new(HashMap::new()));
+    let (broker2topic_handler_tx, broker2topic_handler_rx) = mpsc::channel(1000);
     tokio::spawn(async move {
-        broker_instance.start(listener2broker_packet_rx, listener2broker_client_tx_rx).await;
+        info!("Spawned TopicHandler thread");
+        TopicHandler::handle_topics(broker2topic_handler_rx).await;
+        warn!("TopicHandler thread going to die");
+    });
+    tokio::spawn(async move {
+        info!("Spawned Broker thread");
+        broker_instance.handle_packets(listener2broker_rx, broker2listener_tx, broker2topic_handler_tx).await;
+        warn!("Broker thread going to die");
+    });
+    let client2write_half_ = client2write_half.clone();
+
+    tokio::spawn(async move {
+        info!("Spawned ConnectionHandler incoming connections thread");
+        ConnectionHandler::handle_outgoing_connections(broker2listener_rx, client2write_half_).await;
+        warn!("ConnectionHandler incoming connections thread going to die");
     });
 
-    loop {
-        listener.process().await;
-    }
+    let client2write_half_ = client2write_half.clone();
+    tokio::spawn(async move {
+        info!("Spawned ConnectionHandler outgoing connections thread");
+        ConnectionHandler::handle_incoming_connections(1883, listener2broker_tx, client2write_half_).await;
+        warn!("ConnectionHandler outgoing connections thread going to die");
+    });
+
+    loop {}
 }
+
+
 
 

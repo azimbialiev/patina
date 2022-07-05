@@ -9,11 +9,11 @@ root:
     - stdout
 loggers:
   mqtt::session:
-    level: trace
+    level: warn
   mqtt::broker:
     level: trace
-  mqtt::listener:
-    level: trace
+  mqtt::connection_handler:
+    level: warn
   mqtt::connection:
     level: info
   mqtt::decoder:

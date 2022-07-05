@@ -1,9 +1,10 @@
 use core::{fmt, result};
 use std::borrow::{Borrow, BorrowMut};
-use bytes::{BufMut, BytesMut};
-use log::{trace, debug, warn, error};
-use crate::mqtt::{ConnectAcknowledgeFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, VariableHeader};
 
+use bytes::{BufMut, BytesMut};
+use log::{debug, error, trace};
+
+use crate::mqtt::{ConnectAcknowledgeFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, VariableHeader};
 
 pub type EncodeResult<T> = result::Result<T, EncodeError>;
 
@@ -28,7 +29,7 @@ pub trait LengthCalculator<T>: Encoder<T> {
         trace!("LengthCalculator::calculate_length");
         self.internal_buffer_mut().clear();
         let buffer = &mut BytesMut::new();
-        self.encode(item, buffer);
+        self.encode(item, buffer).expect("panic self.encode");
         self.internal_buffer_mut().put_slice(buffer);
         let length = self.internal_buffer_mut().len();
         trace!("Item Length: {:?}", length);
@@ -120,7 +121,7 @@ impl FixedHeaderEncoder {
             return Err(EncodeError::NotEnoughData);
         }
 
-        for i in 0..control_flags.len() - 1 {
+        for i in 0..(control_flags.len() - 1) {
             let bit_pos = i; //Control flags need to be in the 4 MSBs
             first_byte = (if control_flags[i] { 1 } else { 0 } << bit_pos) | first_byte;
         }
@@ -132,10 +133,9 @@ impl FixedHeaderEncoder {
         trace!("FixedHeaderEncoder::encode_publish_flags");
         first_byte = (if dup_flag { 1 } else { 0 } << 0) | first_byte;
         let qos_flags = qos_level.to_bool();
-        first_byte = (if qos_flags.0 { 1 } else { 0 } << 1) | first_byte;
-        first_byte = (if qos_flags.1 { 1 } else { 0 } << 2) | first_byte;
+        first_byte = (if qos_flags.1 { 1 } else { 0 } << 1) | first_byte;
+        first_byte = (if qos_flags.0 { 1 } else { 0 } << 2) | first_byte;
         first_byte = (if retain { 1 } else { 0 } << 3) | first_byte;
-
         return Ok(first_byte);
     }
 }
@@ -261,44 +261,44 @@ impl Encoder<VariableHeader> for VariableHeaderEncoder {
             ControlPacketType::CONNACK => {
                 self.encode_connect_acknowledge_flag(item.connect_acknowledge_flags(), buffer);
                 self.encode_reason_code(item.reason_code(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PUBLISH => {
-                self.write_utf8_encoded_string(item.topic_name(), buffer);
-                if item.packet_identifier().is_some() {
-                    self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
+                self.write_utf8_encoded_string(item.topic_name(), buffer).expect("can't encode utf8 string");
+                if item.packet_identifier_opt().is_some() {
+                    self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
                 }
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PUBACK => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
                 self.encode_reason_code(item.reason_code(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PUBREC => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
                 self.encode_reason_code(item.reason_code(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PUBREL => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
                 self.encode_reason_code(item.reason_code(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PUBCOMP => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
                 self.encode_reason_code(item.reason_code(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::SUBSCRIBE => {}
             ControlPacketType::SUBACK => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::UNSUBSCRIBE => {}
             ControlPacketType::UNSUBACK => {
-                self.encode_packet_identifier(item.packet_identifier().unwrap(), buffer);
-                property_encoder.encode(&item.properties(), buffer);
+                self.encode_packet_identifier(item.packet_identifier_opt().unwrap(), buffer);
+                property_encoder.encode(&item.properties(), buffer).expect("encode");
             }
             ControlPacketType::PINGREQ => {}
             ControlPacketType::PINGRESP => {}
@@ -334,7 +334,7 @@ impl PayloadEncoder {
         trace!("VariableHeaderEncoder::calculate_length");
         self.internal_buffer.clear();
         let buffer = &mut BytesMut::new();
-        self.encode(item, buffer);
+        self.encode(item, buffer).expect("encode");
         self.internal_buffer.put_slice(buffer);
         let length = self.internal_buffer.len();
         trace!("VariableHeaderLength: {:?}", length);
