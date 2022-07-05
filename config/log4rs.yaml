@@ -1,0 +1,26 @@
+refresh_rate: 30 seconds
+appenders:
+  stdout:
+    kind: console
+
+root:
+  level: trace
+  appenders:
+    - stdout
+loggers:
+  mqtt::session:
+    level: trace
+  mqtt::broker:
+    level: trace
+  mqtt::listener:
+    level: trace
+  mqtt::connection:
+    level: info
+  mqtt::decoder:
+    level: warn
+  mqtt::encoder:
+    level: warn
+  mqtt::topic_handler:
+    level: trace
+  mio::poll:
+    level: info
