@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use log4rs;
 use log::{info, warn};
-use metrics::{GaugeValue, Key, Recorder, Unit};
+use metrics::{Counter, Gauge, GaugeValue, Histogram, Key, KeyName, Recorder, Unit};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::MetricKindMask;
 use tokio::sync::{mpsc, Mutex};
@@ -30,22 +30,29 @@ mod tests;
 struct LogRecorder;
 
 impl Recorder for LogRecorder {
-    fn register_counter(&self, key: &Key, _unit: Option<Unit>, _description: Option<&'static str>) {}
 
-    fn register_gauge(&self, key: &Key, _unit: Option<Unit>, _description: Option<&'static str>) {}
-
-    fn register_histogram(&self, key: &Key, _unit: Option<Unit>, _description: Option<&'static str>) {}
-
-    fn increment_counter(&self, key: &Key, value: u64) {
-        info!("Metrics::counter '{}' -> {}", key, value);
+    fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
+        todo!()
     }
 
-    fn update_gauge(&self, key: &Key, value: GaugeValue) {
-        info!("Metrics::gauge '{}' -> {:?}", key, value);
+    fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
+        todo!()
     }
 
-    fn record_histogram(&self, key: &Key, value: f64) {
-        info!("Metrics::histogram '{}' -> {}", key, value);
+    fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
+        todo!()
+    }
+
+    fn register_counter(&self, key: &Key) -> Counter {
+        todo!()
+    }
+
+    fn register_gauge(&self, key: &Key) -> Gauge {
+        todo!()
+    }
+
+    fn register_histogram(&self, key: &Key) -> Histogram {
+        todo!()
     }
 }
 
