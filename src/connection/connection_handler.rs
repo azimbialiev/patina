@@ -3,20 +3,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
-use metrics::{increment_counter, increment_gauge};
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio::sync::mpsc::Sender;
+use crate::connection::connection::{encode_packet, read_packet, write_buffer};
 
-use crate::connection::{encode_packet, read_packet, write_buffer};
-use crate::decoder::ReadError;
-use crate::mqtt::{ControlPacket, ControlPacketType};
-
-pub static LISTENER_RECEIVED_PACKETS_COUNT: &str = "listener.received_packets.count";
-pub static LISTENER_INCOMING_HANDLER_THREADS_COUNT: &str = "listener.incoming_handler_threads.count";
-
+use crate::serdes::decoder::ReadError;
+use crate::serdes::mqtt::{ControlPacket, ControlPacketType};
 
 #[derive(Debug)]
 pub struct ConnectionHandler {}
@@ -80,7 +75,6 @@ impl ConnectionHandler {
                     debug!("New connection request from {:?}", client);
                     debug!("Spin up incoming packet handler");
 
-                    increment_gauge!(LISTENER_INCOMING_HANDLER_THREADS_COUNT, 1.0);
                     let listener2broker_ = listener2broker.clone();
                     let (client_rx, client_tx) = stream.into_split();
                     rx_clone.lock().await.insert(client, client_tx);
@@ -91,7 +85,6 @@ impl ConnectionHandler {
                             match read_packet(client_rx_.lock().await).await {
                                 Ok(control_packet) => {
                                     debug!("Got new Control Packet from client: {:?}", client);
-                                    increment_counter!(LISTENER_RECEIVED_PACKETS_COUNT);
                                     match listener2broker_.send((client.clone(), control_packet)).await {
                                         Ok(_) => {
                                             debug!("Sent message to broker");

@@ -1,10 +1,10 @@
 use core::{fmt, result};
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::{ BorrowMut};
 
 use bytes::{BufMut, BytesMut};
 use log::{debug, error, trace};
 
-use crate::mqtt::{ConnectAcknowledgeFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, VariableHeader};
+use crate::serdes::mqtt::{ConnectAcknowledgeFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, VariableHeader};
 
 pub type EncodeResult<T> = result::Result<T, EncodeError>;
 

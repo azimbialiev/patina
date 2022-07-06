@@ -4,36 +4,18 @@ use std::net::SocketAddr;
 use chrono::Local;
 use dashmap::DashMap;
 use log::{debug, error, info, trace, warn};
-use metrics::{decrement_gauge, gauge, increment_counter, increment_gauge, register_counter, register_gauge};
 use rand;
 use rand::Rng;
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::Instant;
 
-use crate::mqtt::{ControlPacket, ControlPacketType, QoSLevel, ReasonCode};
-use crate::session::{Session, SessionState};
-use crate::topic_handler::TopicCommand;
-
-pub static BROKER_HANDLED_PACKETS_COUNT: &str = "broker.handled_packets.count";
-pub static BROKER_CURRENT_HANDLER_THREADS_COUNT: &str = "broker.current_handler_threads.count";
-pub static BROKER_PROCESS_MESSAGE_MICROS: &str = "broker.process_message.micros";
-
-pub static BROKER_CONNECTED_CLIENTS_COUNT: &str = "broker.connected_clients.count";
-pub static BROKER_SENT_PACKETS_COUNT: &str = "broker.sent_packets.count";
-
-pub static BROKER_REGISTER_SOCKET_WAIT_MICROS: &str = "broker.register_socket.wait.micros";
-pub static BROKER_ID2SOCKET_WAIT_COUNT: &str = "broker.id2socket.wait.count";
-pub static BROKER_SOCKET2ID_WAIT_COUNT: &str = "broker.socket2id.wait.count";
-
-
-
-
-
+use crate::serdes::mqtt::{ControlPacket, ControlPacketType, QoSLevel, ReasonCode};
+use crate::session::session_handler::{SessionState, SessionHandler};
+use crate::topic::topic_handler::TopicCommand;
 
 lazy_static! {
 
-    static  ref id2session: DashMap<String, Session> = {
+    static  ref id2session: DashMap<String, SessionHandler> = {
         let map = DashMap::new();
         map
     };
@@ -51,25 +33,10 @@ lazy_static! {
 
 
 #[derive(Debug)]
-pub struct Broker {}
+pub struct PacketHandler {}
 
-impl Broker {
-    pub fn new() -> Self {
-        register_counter!(BROKER_HANDLED_PACKETS_COUNT);
-        register_gauge!(BROKER_CURRENT_HANDLER_THREADS_COUNT);
-        register_gauge!(BROKER_PROCESS_MESSAGE_MICROS);
-        register_gauge!(BROKER_CONNECTED_CLIENTS_COUNT);
-        register_counter!(BROKER_SENT_PACKETS_COUNT);
-
-        register_gauge!(BROKER_REGISTER_SOCKET_WAIT_MICROS);
-        register_gauge!(BROKER_ID2SOCKET_WAIT_COUNT);
-        register_gauge!(BROKER_SOCKET2ID_WAIT_COUNT);
-
-        Broker {}
-    }
-
-
-    pub async fn handle_packets(&'static self, mut listener2broker: Receiver<(SocketAddr, ControlPacket)>, broker2listener: Sender<(SocketAddr, ControlPacket)>, broker2topic_handler: Sender<TopicCommand>) {
+impl PacketHandler {
+    pub async fn handle_packets(mut listener2broker: Receiver<(SocketAddr, ControlPacket)>, broker2listener: Sender<(SocketAddr, ControlPacket)>, broker2topic_handler: Sender<TopicCommand>) {
         info!("Broker::handle_packets");
 
         loop {
@@ -84,14 +51,7 @@ impl Broker {
                     tokio::spawn(async move {
                         let now = Instant::now();
                         trace!("Spawned new thread");
-                        increment_gauge!(BROKER_CURRENT_HANDLER_THREADS_COUNT, 1.0);
-                        match process_message(client, control_packet, to_listener, to_topic_handler).await {
-                            _ => {
-                                gauge!(BROKER_PROCESS_MESSAGE_MICROS, now.elapsed().as_micros() as f64);
-                                increment_counter!(BROKER_HANDLED_PACKETS_COUNT);
-                                decrement_gauge!(BROKER_CURRENT_HANDLER_THREADS_COUNT, 1.0);
-                            }
-                        };
+                        process_message(client, control_packet, to_listener, to_topic_handler).await;
                     });
                 }
             }
@@ -252,19 +212,15 @@ async fn get_client_id(socket: &SocketAddr) -> Result<String, ()> {
 fn unregister_socket(client_id: &String, socket: &SocketAddr) {
     let now = Instant::now();
     trace!("Broker::unregister_socket");
-    increment_gauge!(BROKER_SOCKET2ID_WAIT_COUNT, 1.0);
     match socket2id.remove(socket) {
         None => {
             trace!("Unregister socket2id: {:?} -> {:?}", socket, client_id);
-            decrement_gauge!(BROKER_CONNECTED_CLIENTS_COUNT, 1.0);
         }
         Some(_) => {
             error!("Need to handle 'session taken over' case");
         }
     };
-    decrement_gauge!(BROKER_SOCKET2ID_WAIT_COUNT, 1.0);
 
-    increment_gauge!(BROKER_ID2SOCKET_WAIT_COUNT, 1.0);
     match id2socket.remove(client_id) {
         None => {
             trace!("Unregister id2socket: {:?} -> {:?}", client_id, socket);
@@ -273,29 +229,23 @@ fn unregister_socket(client_id: &String, socket: &SocketAddr) {
             error!("Need to handle 'session taken over' case");
         }
     };
-    decrement_gauge!(BROKER_ID2SOCKET_WAIT_COUNT, 1.0);
-    gauge!(BROKER_REGISTER_SOCKET_WAIT_MICROS, now.elapsed().as_micros() as f64);
 }
 
 fn register_socket(client_id: &String, socket: SocketAddr) -> Option<SocketAddr> {
     let now = Instant::now();
     trace!("Broker::register_socket");
-    increment_gauge!(BROKER_SOCKET2ID_WAIT_COUNT, 1.0);
     if socket2id.contains_key(&socket) {
         warn!("The socket {} is already registered with client_id {}. New client_id: {}",client_id, socket2id.get(&socket).unwrap().to_string(), socket);
     }
     match socket2id.insert(socket.clone(), client_id.clone()) {
         None => {
             trace!("Registered socket2id: {:?} -> {:?}", socket, client_id);
-            increment_gauge!(BROKER_CONNECTED_CLIENTS_COUNT, 1.0);
         }
         Some(_) => {
             error!("Need to handle 'session taken over' case");
         }
     };
-    decrement_gauge!(BROKER_SOCKET2ID_WAIT_COUNT, 1.0);
 
-    increment_gauge!(BROKER_ID2SOCKET_WAIT_COUNT, 1.0);
     let previous_socket = match id2socket.insert(client_id.clone(), socket.clone()) {
         None => {
             trace!("Registered id2socket: {:?} -> {:?}", client_id, socket);
@@ -306,8 +256,6 @@ fn register_socket(client_id: &String, socket: SocketAddr) -> Option<SocketAddr>
             Some(previous_socket)
         }
     };
-    decrement_gauge!(BROKER_ID2SOCKET_WAIT_COUNT, 1.0);
-    gauge!(BROKER_REGISTER_SOCKET_WAIT_MICROS, now.elapsed().as_micros() as f64);
     return previous_socket;
 }
 
@@ -325,7 +273,7 @@ fn register_session(client_id: &String) -> SessionState {
         return SessionState::SessionPresent;
     }
 
-    return match id2session.insert(client_id.clone(), Session::new()) {
+    return match id2session.insert(client_id.clone(), SessionHandler::new()) {
         None => {
             trace!("Created new Session for client: {:?}", client_id);
             SessionState::CleanSession
@@ -339,7 +287,7 @@ fn register_session(client_id: &String) -> SessionState {
 
 fn register_clean_session(client_id: &String) {
     trace!("Broker::register_clean_session");
-    id2session.insert(client_id.clone(), Session::new());
+    id2session.insert(client_id.clone(), SessionHandler::new());
 }
 
 async fn send_packet(client: SocketAddr, packet: ControlPacket, to_listener: Sender<(SocketAddr, ControlPacket)>) -> Result<(), String> {
@@ -352,7 +300,6 @@ async fn send_packets(clients: Vec<SocketAddr>, control_packet: ControlPacket, t
         match to_listener.send((socket, control_packet.clone())).await {
             Ok(_) => {
                 trace!("Successfully sent packet");
-                increment_counter!(BROKER_SENT_PACKETS_COUNT);
             }
             Err(err) => {
                 error!("Can't send data to client {:?}: {:?}", socket, err);

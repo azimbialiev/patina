@@ -8,7 +8,7 @@ mod broker_tests {
 
     use crate::{init_logging, TopicHandler};
     use crate::broker::Broker;
-    use crate::mqtt::{ControlPacket, ControlPacketType, QoSLevel};
+    use crate::serdes::mqtt::{ControlPacket, ControlPacketType, QoSLevel};
     use crate::tests::broker::broker_tests_data::{create_connect_packet, create_publish_packet_qos1, create_subscribe_packet};
 
     #[derive(Debug)]

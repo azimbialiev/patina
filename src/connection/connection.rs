@@ -1,25 +1,17 @@
 use core::fmt;
-use std::borrow::BorrowMut;
 use std::io::ErrorKind;
 
 use bitreader::BitReader;
 use bytes::BytesMut;
 use log::{debug, error, trace};
-use metrics::{gauge, register_gauge};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpStream;
 use tokio::sync::MutexGuard;
 use tokio::time::Instant;
 
-use crate::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, VariableHeaderDecoder};
-use crate::encoder::{Encoder, EncodeResult, FixedHeaderEncoder, LengthCalculator, OptEncoder, PayloadEncoder, VariableHeaderEncoder};
-use crate::mqtt::ControlPacket;
-
-pub static CONNECTION_WRITE_MICROS: &str = "connection.write.micros";
-pub static CONNECTION_ENCODE_MICROS: &str = "connection.encode.micros";
-pub static CONNECTION_READ_MICROS: &str = "connection.read.micros";
-pub static CONNECTION_DECODE_MICROS: &str = "connection.decode.micros";
+use crate::serdes::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, VariableHeaderDecoder};
+use crate::serdes::encoder::{Encoder, EncodeResult, FixedHeaderEncoder, LengthCalculator, OptEncoder, PayloadEncoder, VariableHeaderEncoder};
+use crate::serdes::mqtt::ControlPacket;
 
 pub type WriteResult = Result<(), WriteError>; //TODO Needs better errors
 
@@ -43,13 +35,6 @@ impl fmt::Display for WriteError {
     }
 }
 
-pub fn init_connection_metric() {
-    register_gauge!(CONNECTION_WRITE_MICROS);
-    register_gauge!(CONNECTION_ENCODE_MICROS);
-    register_gauge!(CONNECTION_READ_MICROS);
-    register_gauge!(CONNECTION_DECODE_MICROS);
-}
-
 pub async fn write_buffer(buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> WriteResult {
     let now = Instant::now();
     debug!("MQTTConnection::write");
@@ -61,7 +46,6 @@ pub async fn write_buffer(buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> Wri
     match stream.write(buffer).await {
         Ok(result) => {
             trace!("{:?} bytes written to stream", result);
-            gauge!(CONNECTION_WRITE_MICROS, now.elapsed().as_micros() as f64 );
         }
         Err(e) => {
             error!("Can't send packet: {:?}", e);
@@ -112,7 +96,6 @@ pub fn encode_packet(packet: &ControlPacket) -> EncodeResult<BytesMut> {
     fixed_header_encoder.encode(&(packet.fixed_header(), calculated_remaining_length), &mut buffer)?;
     variable_header_encoder.encode_opt(packet.variable_header_opt(), &mut buffer)?;
     payload_encoder.encode_opt(packet.payload_opt(), &mut buffer).expect("panic encode_opt");
-    gauge!(CONNECTION_ENCODE_MICROS, now.elapsed().as_micros() as f64);
     Ok(buffer)
 }
 
@@ -123,7 +106,6 @@ pub async fn read_packet(stream: MutexGuard<'_, OwnedReadHalf>)
     debug!("MQTTConnection::read_packet");
     return match decode_packet(stream).await {
         Ok(result) => {
-            gauge!(CONNECTION_READ_MICROS, now.elapsed().as_micros() as f64);
             Ok(result)
         }
         Err(err) => {
@@ -190,7 +172,6 @@ async fn decode_packet(mut stream: MutexGuard<'_, OwnedReadHalf>) -> DecodeResul
 
     let control_packet = ControlPacket::new(fixed_header, variable_header, payload);
     debug!("ControlPacket: {:?}", control_packet);
-    gauge!(CONNECTION_DECODE_MICROS, now.elapsed().as_micros() as f64);
     return Ok(control_packet);
 }
 

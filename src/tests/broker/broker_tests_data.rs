@@ -4,10 +4,9 @@ use log::{info, log, warn};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::broker::Broker;
 use crate::init_logging;
-use crate::mqtt::{ConnectFlags, ControlPacket, ControlPacketType, QoSLevel};
-use crate::topic_handler::TopicCommand;
+use crate::serdes::mqtt::{ConnectFlags, ControlPacket, ControlPacketType, QoSLevel};
+use crate::topic::topic_handler;
 
 pub fn create_connect_packet(client_id: String) -> ControlPacket {
     ControlPacket::connect(

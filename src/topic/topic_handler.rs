@@ -1,19 +1,10 @@
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc};
 
-use dashmap::DashMap;
 use log::{debug, trace};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 
-// lazy_static! {
-//
-//     static ref topic2subscribers: DashMap<String, Vec<String>> = {
-//         let map = DashMap::new();
-//         map
-//     };
-// }
 #[derive(Debug)]
 pub enum TopicCommand {
     Subscribe {

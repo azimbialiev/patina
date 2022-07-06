@@ -1,5 +1,4 @@
 use core::result;
-use std::fs::read;
 use std::io::ErrorKind;
 
 use bitreader::{BitReader, BitReaderError};
@@ -7,10 +6,9 @@ use bytes::BufMut;
 use log::{debug, error, trace};
 use tokio::io::AsyncReadExt;
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::TcpStream;
 use tokio::sync::MutexGuard;
 
-use crate::mqtt::{ConnectFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, RetainHandling, TopicFilter, VariableHeader};
+use crate::serdes::mqtt::{ConnectFlags, ControlPacketType, FixedHeader, Payload, Property, QoSLevel, ReasonCode, RetainHandling, TopicFilter, VariableHeader};
 
 pub type ReadResult<T> = result::Result<T, ReadError>;
 pub type DecodeResult<T> = result::Result<T, DecodeError>;

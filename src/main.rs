@@ -4,87 +4,32 @@ extern crate core;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use log4rs;
 use log::{info, warn};
-use metrics::{Counter, Gauge, GaugeValue, Histogram, Key, KeyName, Recorder, Unit};
-use metrics_exporter_prometheus::PrometheusBuilder;
-use metrics_util::MetricKindMask;
 use tokio::sync::{mpsc, Mutex};
+use crate::broker::packet_handler::PacketHandler;
 
-use crate::broker::Broker;
-use crate::connection_handler::ConnectionHandler;
-use crate::topic_handler::TopicHandler;
+use crate::connection::connection_handler::ConnectionHandler;
+use crate::topic::topic_handler::TopicHandler;
 
-mod connection_handler;
-mod mqtt;
-mod decoder;
-mod broker;
-mod connection;
-mod encoder;
-mod topic_handler;
-mod session;
+
 mod tests;
-
-struct LogRecorder;
-
-impl Recorder for LogRecorder {
-
-    fn describe_counter(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
-        todo!()
-    }
-
-    fn describe_gauge(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
-        todo!()
-    }
-
-    fn describe_histogram(&self, key: KeyName, unit: Option<Unit>, description: &'static str) {
-        todo!()
-    }
-
-    fn register_counter(&self, key: &Key) -> Counter {
-        todo!()
-    }
-
-    fn register_gauge(&self, key: &Key) -> Gauge {
-        todo!()
-    }
-
-    fn register_histogram(&self, key: &Key) -> Histogram {
-        todo!()
-    }
-}
-
-static RECORDER: LogRecorder = LogRecorder;
-
-lazy_static! {
-     static ref broker_instance: Broker = {
-        Broker::new()
-    };
-}
+mod topic;
+mod connection;
+mod serdes;
+mod broker;
+mod session;
+mod traits;
 
 pub fn init_logging() {
     log4rs::init_file("config/log4rs.yaml", Default::default());
 }
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread",worker_threads = 10)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
-    let builder = PrometheusBuilder::new();
-    builder
-        .idle_timeout(
-            MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
-            Some(Duration::from_secs(10)),
-        )
-        .install()
-        .expect("failed to install Prometheus recorder");
-
-    metrics::set_recorder(&RECORDER);
-
-    connection::init_connection_metric();
-
 
     info!("MQTT SERVER");
     let (listener2broker_tx, listener2broker_rx) = mpsc::channel(1000);
@@ -98,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     tokio::spawn(async move {
         info!("Spawned Broker thread");
-        broker_instance.handle_packets(listener2broker_rx, broker2listener_tx, broker2topic_handler_tx).await;
+        PacketHandler::handle_packets(listener2broker_rx, broker2listener_tx, broker2topic_handler_tx).await;
         warn!("Broker thread going to die");
     });
     let client2write_half_ = client2write_half.clone();
