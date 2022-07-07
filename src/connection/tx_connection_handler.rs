@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::{mpsc, Mutex};
 use crate::connection::connection::{encode_packet, write_buffer};
-use metered::{metered, Throughput, HitCount};
+use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
 
 use crate::serdes::mqtt::{ControlPacket, ControlPacketType};
 
@@ -44,7 +44,7 @@ impl TxConnectionHandler {
         return false;
     }
 
-    #[measure([HitCount, Throughput])]
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     async fn send_packet(&self, socket: &SocketAddr, packet: &ControlPacket, stream: &mut OwnedWriteHalf) {
         match encode_packet(packet) {
             Ok(buffer) => {

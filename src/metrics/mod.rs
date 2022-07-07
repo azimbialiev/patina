@@ -1,1 +1,1 @@
-pub mod MetricsRegistry;
+pub mod metrics_registry;

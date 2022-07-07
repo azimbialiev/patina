@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use log4rs;
 use log::{info, warn};
+use nameof::name_of_type;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use crate::broker::packet_handler::PacketHandler;
 use crate::connection::rx_connection_handler::{RxConnectionHandler};
 use crate::connection::tx_connection_handler::{TxConnectionHandler};
-use crate::metrics::MetricsRegistry::ServiceMetricRegistry;
+use crate::metrics::metrics_registry::ServiceMetricRegistry;
 use crate::topic::topic_handler::TopicHandler;
 
 mod tests;
@@ -44,9 +45,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TopicHandler::handle_topics(broker2topic_handler_rx).await;
         warn!("TopicHandler thread going to die");
     });
+    let packet_handler = Arc::new(RwLock::new(PacketHandler::default()));
+    let packet_handler_ = packet_handler.clone();
     tokio::spawn(async move {
         info!("Spawned Broker thread");
-        PacketHandler::handle_packets(listener2broker_rx, broker2listener_tx, broker2topic_handler_tx).await;
+        let lock = packet_handler_.read().await;
+        lock.handle_packets(listener2broker_rx, broker2listener_tx, broker2topic_handler_tx).await;
         warn!("Broker thread going to die");
     });
 
@@ -79,11 +83,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let registry = &ServiceMetricRegistry {
                     rx_connection_handler: &rx_connection_handler.read().await.metrics,
                     tx_connection_handler: &tx_connection_handler.read().await.metrics,
+                    packet_handler: &packet_handler.read().await.metrics,
                 };
                 let (mut stream, _) = listener.accept().await.unwrap();
 
                 let mut globals = HashMap::new();
-                globals.insert("service", "serde_prometheus_example");
+                globals.insert(name_of_type!(RxConnectionHandler), "serde_prometheus_example");
+                globals.insert(name_of_type!(TxConnectionHandler), "serde_prometheus_example");
+
                 let serialized = serde_prometheus::to_string(
                     registry,
                     Some("patina"),

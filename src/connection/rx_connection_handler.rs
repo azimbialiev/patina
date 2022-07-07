@@ -8,8 +8,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex};
 use tokio::sync::mpsc::Sender;
 use crate::connection::connection::{read_packet};
-use metered::{metered, Throughput, HitCount};
-use nameof::{name_of, name_of_type};
+use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
+use nameof::{name_of_type};
 
 use crate::serdes::decoder::ReadError;
 use crate::serdes::mqtt::{ControlPacket, ControlPacketType};
@@ -40,10 +40,7 @@ impl RxConnectionHandler {
                     let listener2broker_ = listener2broker.clone();
                     let (in_stream, out_stream) = stream.into_split();
                     stream_repository.lock().await.insert(socket, out_stream);
-
-                    tokio::spawn(async move {
-                        RxConnectionHandler::default().handle_client(&socket, in_stream, listener2broker_).await;
-                    });
+                    self.handle_client(&socket, in_stream, listener2broker_).await;
                 }
                 Err(error) => {
                     error!("Can't handle TCP Stream {:?}", error);
@@ -52,35 +49,38 @@ impl RxConnectionHandler {
         }
     }
 
-    #[measure([HitCount, Throughput])]
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     async fn handle_client(&self, socket: &SocketAddr, in_stream: OwnedReadHalf, listener2broker: Sender<(SocketAddr, ControlPacket)>) {
-        info!("{}::{}({})", name_of_type!(RxConnectionHandler), "handle_client", socket);
-        let stream = Mutex::new(in_stream);
-        loop {
-            match read_packet(stream.lock().await).await {
-                Ok(control_packet) => {
-                    debug!("Got new Control Packet from client: {:?}", socket);
-                    match listener2broker.send((socket.clone(), control_packet)).await {
-                        Ok(_) => {
-                            debug!("Sent message to broker");
-                            Ok(())
-                        }
-                        Err(err) => {
-                            Err(format!("Can't send message to broker: {:?}", err))
-                        }
-                    }.expect("panic send_to_broker");
-                }
-                Err(err) => {
-                    error!("Can't read any valid control packet from stream: {:?}", err);
-                    match err.cause() {
-                        ReadError::ConnectionError => {
-                            warn!("Connection closed for client {:?}. Going to stop incoming messages handler.", socket);
-                            break;
-                        }
-                        _ => {}
+        let socket = socket.clone();
+        tokio::spawn(async move {
+            info!("{}::{}({})", name_of_type!(RxConnectionHandler), "handle_client", socket);
+            let stream = Mutex::new(in_stream);
+            loop {
+                match read_packet(stream.lock().await).await {
+                    Ok(control_packet) => {
+                        debug!("Got new Control Packet from client: {:?}", socket);
+                        match listener2broker.send((socket.clone(), control_packet)).await {
+                            Ok(_) => {
+                                debug!("Sent message to broker");
+                                Ok(())
+                            }
+                            Err(err) => {
+                                Err(format!("Can't send message to broker: {:?}", err))
+                            }
+                        }.expect("panic send_to_broker");
                     }
-                }
-            };
-        }
+                    Err(err) => {
+                        error!("Can't read any valid control packet from stream: {:?}", err);
+                        match err.cause() {
+                            ReadError::ConnectionError => {
+                                warn!("Connection closed for client {:?}. Going to stop incoming messages handler.", socket);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                };
+            }
+        });
     }
 }
