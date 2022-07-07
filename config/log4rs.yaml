@@ -8,19 +8,25 @@ root:
   appenders:
     - stdout
 loggers:
-  mqtt::session:
-    level: warn
-  mqtt::broker:
-    level: trace
-  mqtt::connection_handler:
-    level: warn
-  mqtt::connection:
+  patina::broker:
     level: info
-  mqtt::decoder:
-    level: warn
-  mqtt::encoder:
-    level: warn
-  mqtt::topic_handler:
-    level: trace
+  patina::connection:
+    level: info
+  patina::metrics:
+    level: info
+  patina::serdes:
+    level: info
+  patina::session:
+    level: info
+  patina::tests:
+    level: info
+  patina::topic:
+    level: info
   mio::poll:
     level: info
+  hyper:
+    level: warn
+  tracing:
+    level: warn
+  warp:
+    level: warn

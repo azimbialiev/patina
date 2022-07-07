@@ -9,7 +9,9 @@ services:
     links:
       - influxdb
     ports:
-    - '127.0.0.1:8125:8125/udp'
+      - '127.0.0.1:8125:8125/udp'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   influxdb:
     image: influxdb:1.8-alpine
