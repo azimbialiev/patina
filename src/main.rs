@@ -1,16 +1,17 @@
+extern crate core;
 #[macro_use]
 extern crate lazy_static;
-extern crate core;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use log4rs;
 use log::{info, warn};
+use log4rs;
 use tokio::sync::{mpsc, Mutex};
+
 use crate::broker::packet_handler::PacketHandler;
-use crate::connection::rx_connection_handler::{RxConnectionHandler};
-use crate::connection::tx_connection_handler::{TxConnectionHandler};
+use crate::connection::rx_connection_handler::RxConnectionHandler;
+use crate::connection::tx_connection_handler::TxConnectionHandler;
 use crate::metrics::metrics_registry::ServiceMetricRegistry;
 use crate::topic::topic_handler::TopicHandler;
 
@@ -21,6 +22,7 @@ mod serdes;
 mod broker;
 mod session;
 mod metrics;
+mod model;
 
 pub fn init_logging() {
     log4rs::init_file("config/log4rs.yaml", Default::default());

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc};
+use std::sync::Arc;
 
 use log::{debug, trace};
 use tokio::sync::mpsc::Receiver;

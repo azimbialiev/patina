@@ -1,12 +1,6 @@
-use std::net::{IpAddr, SocketAddr};
-
-use log::{info, log, warn};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
-
-use crate::init_logging;
-use crate::serdes::mqtt::{ConnectFlags, ControlPacket, ControlPacketType, QoSLevel};
-use crate::topic::topic_handler;
+use crate::model::control_packet::ControlPacket;
+use crate::model::qos_level::QoSLevel;
+use crate::model::variable_header::ConnectFlags;
 
 pub fn create_connect_packet(client_id: String) -> ControlPacket {
     ControlPacket::connect(

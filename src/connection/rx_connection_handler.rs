@@ -1,23 +1,17 @@
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use bitreader::BitReader;
-use bytes::BytesMut;
 
 use log::{debug, error, info, trace, warn};
+use metered::{*};
+use nameof::{name_of, name_of_type};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, MutexGuard, RwLock};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
-use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
-use nameof::{name_of, name_of_type};
-use serde::Serializer;
-use tokio::io::AsyncReadExt;
 
-use crate::serdes::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, ReadResult, VariableHeaderDecoder};
-use crate::serdes::mqtt::{ControlPacket, ControlPacketType, FixedHeader};
+use crate::model::control_packet::ControlPacket;
+use crate::serdes::deserializer::error::ReadError;
 use crate::serdes::mqtt_decoder::MqttDecoder;
 
 #[derive(Default, Debug)]

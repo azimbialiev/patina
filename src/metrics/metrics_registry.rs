@@ -1,7 +1,7 @@
-use crate::connection::rx_connection_handler::{RxConnectionHandlerMetrics};
-use crate::serdes::mqtt_decoder::{MqttDecoderMetrics};
-use crate::connection::tx_connection_handler::{TxConnectionHandlerMetrics};
-use crate::broker::packet_handler::{PacketHandlerMetrics};
+use crate::broker::packet_handler::PacketHandlerMetrics;
+use crate::connection::rx_connection_handler::RxConnectionHandlerMetrics;
+use crate::connection::tx_connection_handler::TxConnectionHandlerMetrics;
+use crate::serdes::mqtt_decoder::MqttDecoderMetrics;
 
 #[derive(Clone)]
 #[derive(serde::Serialize)]

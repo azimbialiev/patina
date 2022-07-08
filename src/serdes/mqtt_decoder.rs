@@ -1,23 +1,29 @@
 use std::io::ErrorKind;
 use std::ops::Deref;
 use std::sync::Arc;
+
 use bitreader::BitReader;
 use bytes::BytesMut;
 use log::{debug, error, trace};
+use metered::{*};
+use nameof::name_of_type;
 use serde::Serializer;
 use tokio::io::AsyncReadExt;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::MutexGuard;
-use crate::serdes::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, VariableHeaderDecoder};
-use crate::serdes::mqtt::ControlPacket;
-use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
-use nameof::{name_of, name_of_type};
+
+use crate::model::control_packet::ControlPacket;
+use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
+use crate::serdes::deserializer::fixed_header_decoder::FixedHeaderDecoder;
+use crate::serdes::deserializer::payload_decoder::PayloadDecoder;
+use crate::serdes::deserializer::variable_header_decoder::VariableHeaderDecoder;
+use crate::serdes::r#trait::decoder::Decoder;
 
 #[derive(Default, Clone, Debug)]
-pub struct MqttDecoder(Arc<InnerDecoder>);
+pub struct MqttDecoder(Arc<MqttDecoderImpl>);
 
 impl Deref for MqttDecoder {
-    type Target = InnerDecoder;
+    type Target = MqttDecoderImpl;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -27,19 +33,19 @@ impl Deref for MqttDecoder {
 
 impl serde::Serialize for MqttDecoder{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        return self.serialize(serializer);
+        return self.deref().serialize(serializer);
     }
 }
 
 #[derive(Default, Debug)]
 #[derive(serde::Serialize)]
-pub struct InnerDecoder {
+pub struct MqttDecoderImpl {
     pub(crate) metrics: MqttDecoderMetrics,
 
 }
 
 #[metered(registry = MqttDecoderMetrics)]
-impl InnerDecoder {
+impl MqttDecoderImpl {
 
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub(crate) async fn decode_packet(&self, mut stream: MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<ControlPacket> {

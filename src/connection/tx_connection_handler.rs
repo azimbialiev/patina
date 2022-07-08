@@ -2,17 +2,22 @@ use core::fmt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use bytes::BytesMut;
 
+use bytes::BytesMut;
 use log::{debug, error, trace};
+use metered::{*};
+use nameof::name_of;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::{mpsc, Mutex};
-use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
-use nameof::name_of;
-use crate::serdes::encoder::{Encoder, EncodeResult, FixedHeaderEncoder, LengthCalculator, OptEncoder, PayloadEncoder, VariableHeaderEncoder};
 
-use crate::serdes::mqtt::{ControlPacket, ControlPacketType};
+use crate::model::control_packet::ControlPacket;
+use crate::model::fixed_header::ControlPacketType;
+use crate::serdes::r#trait::encoder::{Encoder, LengthCalculator, OptEncoder};
+use crate::serdes::serializer::error::EncodeResult;
+use crate::serdes::serializer::fixed_header_encoder::FixedHeaderEncoder;
+use crate::serdes::serializer::payload_encoder::PayloadEncoder;
+use crate::serdes::serializer::variable_header_encoder::VariableHeaderEncoder;
 
 #[derive(Default, Debug)]
 #[derive(serde::Serialize)]

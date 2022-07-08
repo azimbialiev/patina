@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use log::trace;
 
-use crate::serdes::mqtt::{ControlPacket, QoSLevel};
+use crate::model::control_packet::ControlPacket;
+use crate::model::qos_level::QoSLevel;
 
 pub enum SessionState {
     SessionPresent,

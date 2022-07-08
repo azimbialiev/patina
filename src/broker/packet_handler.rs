@@ -4,15 +4,16 @@ use std::net::SocketAddr;
 use chrono::Local;
 use dashmap::DashMap;
 use log::{debug, error, info, trace, warn};
+use metered::{*};
 use rand;
 use rand::Rng;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::Instant;
-use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
 
-
-use crate::serdes::mqtt::{ControlPacket, ControlPacketType, QoSLevel, ReasonCode};
-use crate::session::session_handler::{SessionState, SessionHandler};
+use crate::model::control_packet::ControlPacket;
+use crate::model::fixed_header::ControlPacketType;
+use crate::model::qos_level::QoSLevel;
+use crate::model::reason_code::ReasonCode;
+use crate::session::session_handler::{SessionHandler, SessionState};
 use crate::topic::topic_handler::TopicCommand;
 
 lazy_static! {
@@ -221,7 +222,6 @@ async fn get_client_id(socket: &SocketAddr) -> String {
 }
 
 fn unregister_socket(client_id: &String, socket: &SocketAddr) {
-    let now = Instant::now();
     trace!("Broker::unregister_socket");
     match socket2id.remove(socket) {
         None => {
@@ -243,7 +243,6 @@ fn unregister_socket(client_id: &String, socket: &SocketAddr) {
 }
 
 fn register_socket(client_id: &String, socket: SocketAddr) -> Option<SocketAddr> {
-    let now = Instant::now();
     trace!("Broker::register_socket");
     if socket2id.contains_key(&socket) {
         warn!("The socket {} is already registered with client_id {}. New client_id: {}",client_id, socket2id.get(&socket).unwrap().to_string(), socket);
