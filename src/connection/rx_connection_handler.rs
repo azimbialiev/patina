@@ -1,23 +1,30 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use bitreader::BitReader;
+use bytes::BytesMut;
 
 use log::{debug, error, info, trace, warn};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex};
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::sync::mpsc::Sender;
-use crate::connection::connection::{read_packet};
 use metered::{metered, Throughput, HitCount, InFlight, ResponseTime};
-use nameof::{name_of_type};
+use nameof::{name_of, name_of_type};
+use serde::Serializer;
+use tokio::io::AsyncReadExt;
 
-use crate::serdes::decoder::ReadError;
-use crate::serdes::mqtt::{ControlPacket, ControlPacketType};
+use crate::serdes::decoder::{DecodeError, Decoder, DecodeResult, FixedHeaderDecoder, PayloadDecoder, ReadError, ReadResult, VariableHeaderDecoder};
+use crate::serdes::mqtt::{ControlPacket, ControlPacketType, FixedHeader};
+use crate::serdes::mqtt_decoder::MqttDecoder;
 
 #[derive(Default, Debug)]
 #[derive(serde::Serialize)]
 pub struct RxConnectionHandler {
     pub(crate) metrics: RxConnectionHandlerMetrics,
+    pub(crate) decoder: MqttDecoder,
 }
 
 #[metered(registry = RxConnectionHandlerMetrics)]
@@ -34,13 +41,12 @@ impl RxConnectionHandler {
         loop {
             match listener_instance.accept().await {
                 Ok((stream, socket)) => {
-                    debug!("New connection request from {:?}", socket);
-                    debug!("Spin up incoming packet handler");
-
-                    let listener2broker_ = listener2broker.clone();
+                    info!("New connection request from {:?}", socket);
+                    let listener2broker = listener2broker.clone();
                     let (in_stream, out_stream) = stream.into_split();
+                    trace!("Acquiring {} lock", name_of!(stream_repository));
                     stream_repository.lock().await.insert(socket, out_stream);
-                    self.handle_client(&socket, in_stream, listener2broker_).await;
+                    self.handle_client(&socket, in_stream, listener2broker).await;
                 }
                 Err(error) => {
                     error!("Can't handle TCP Stream {:?}", error);
@@ -52,11 +58,14 @@ impl RxConnectionHandler {
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     async fn handle_client(&self, socket: &SocketAddr, in_stream: OwnedReadHalf, listener2broker: Sender<(SocketAddr, ControlPacket)>) {
         let socket = socket.clone();
+        let decode = self.decoder.clone();
         tokio::spawn(async move {
             info!("{}::{}({})", name_of_type!(RxConnectionHandler), "handle_client", socket);
             let stream = Mutex::new(in_stream);
             loop {
-                match read_packet(stream.lock().await).await {
+                trace!("Acquiring {} lock", name_of!(stream));
+                let stream = stream.lock().await;
+                match decode.decode_packet(stream).await {
                     Ok(control_packet) => {
                         debug!("Got new Control Packet from client: {:?}", socket);
                         match listener2broker.send((socket.clone(), control_packet)).await {
@@ -83,4 +92,8 @@ impl RxConnectionHandler {
             }
         });
     }
+
+
 }
+
+

@@ -14,6 +14,7 @@ pub async fn start_metrics_server(rx_connection_handler: Arc<RxConnectionHandler
                 rx_connection_handler: &rx_connection_handler.metrics,
                 tx_connection_handler: &tx_connection_handler.metrics,
                 packet_handler: &packet_handler.metrics,
+                mqtt_decoder: &rx_connection_handler.decoder.metrics
             };
             let globals = HashMap::new();
             serde_prometheus::to_string(
