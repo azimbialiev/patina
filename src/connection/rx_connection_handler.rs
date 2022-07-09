@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
 use metered::{*};
 use nameof::{name_of, name_of_type};
+use serde::Serializer;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
+use tokio::task::JoinHandle;
 
 use crate::model::control_packet::ControlPacket;
 use crate::serdes::deserializer::error::ReadError;
@@ -18,7 +21,7 @@ use crate::serdes::mqtt_decoder::MqttDecoder;
 #[derive(serde::Serialize)]
 pub struct RxConnectionHandler {
     pub(crate) metrics: RxConnectionHandlerMetrics,
-    pub(crate) decoder: MqttDecoder,
+    pub(crate) client_handler: RxClientHandler,
 }
 
 #[metered(registry = RxConnectionHandlerMetrics)]
@@ -36,11 +39,17 @@ impl RxConnectionHandler {
             match listener_instance.accept().await {
                 Ok((stream, socket)) => {
                     info!("New connection request from {:?}", socket);
-                    let listener2broker = listener2broker.clone();
+
+                    let handle = self.client_handler.clone();
                     let (in_stream, out_stream) = stream.into_split();
-                    trace!("Acquiring {} lock", name_of!(stream_repository));
-                    stream_repository.lock().await.insert(socket, out_stream);
-                    self.handle_client(&socket, in_stream, listener2broker).await;
+                    let stream_repository = stream_repository.clone();
+                    let listener2broker = listener2broker.clone();
+                    tokio::spawn(async move {
+                        stream_repository.lock().await.insert(socket, out_stream);
+                        let listener2broker = listener2broker.clone();
+                        trace!("Acquiring {} lock", name_of!(stream_repository));
+                        handle.handle_client(&socket, in_stream, listener2broker).await;
+                    });
                 }
                 Err(error) => {
                     error!("Can't handle TCP Stream {:?}", error);
@@ -48,13 +57,42 @@ impl RxConnectionHandler {
             }
         }
     }
+}
 
-    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
+#[derive(Default, Clone, Debug)]
+pub struct RxClientHandler(Arc<RxClientHandlerImpl>);
+
+impl Deref for RxClientHandler {
+    type Target = RxClientHandlerImpl;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+impl serde::Serialize for RxClientHandler {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        return self.deref().serialize(serializer);
+    }
+}
+
+#[derive(Default, Debug)]
+#[derive(serde::Serialize)]
+pub struct RxClientHandlerImpl {
+    pub(crate) decoder: MqttDecoder,
+    pub(crate) metrics: RxClientHandlerMetrics,
+
+}
+
+#[metered(registry = RxClientHandlerMetrics)]
+impl RxClientHandlerImpl {
+    #[measure([HitCount, InFlight, ResponseTime])]
     async fn handle_client(&self, socket: &SocketAddr, in_stream: OwnedReadHalf, listener2broker: Sender<(SocketAddr, ControlPacket)>) {
+        info!("START - handle_client({})", socket);
         let socket = socket.clone();
         let decode = self.decoder.clone();
-        tokio::spawn(async move {
-            info!("{}::{}({})", name_of_type!(RxConnectionHandler), "handle_client", socket);
+        let thread_handle: JoinHandle<Result<(), ()>> = tokio::spawn(async move {
             let stream = Mutex::new(in_stream);
             loop {
                 trace!("Acquiring {} lock", name_of!(stream));
@@ -84,10 +122,11 @@ impl RxConnectionHandler {
                     }
                 };
             }
+            Ok(())
         });
+        thread_handle.await;
+        info!("END - handle_client({})", socket);
     }
-
-
 }
 
 

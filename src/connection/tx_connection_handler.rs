@@ -1,28 +1,27 @@
 use core::fmt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use bytes::BytesMut;
 use log::{debug, error, trace};
 use metered::{*};
 use nameof::name_of;
+use serde::Serializer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::model::control_packet::ControlPacket;
 use crate::model::fixed_header::ControlPacketType;
-use crate::serdes::r#trait::encoder::{Encoder, LengthCalculator, OptEncoder};
-use crate::serdes::serializer::error::EncodeResult;
-use crate::serdes::serializer::fixed_header_encoder::FixedHeaderEncoder;
-use crate::serdes::serializer::payload_encoder::PayloadEncoder;
-use crate::serdes::serializer::variable_header_encoder::VariableHeaderEncoder;
+use crate::serdes::mqtt_encoder::MqttEncoder;
 
 #[derive(Default, Debug)]
 #[derive(serde::Serialize)]
 pub struct TxConnectionHandler {
     pub(crate) metrics: TxConnectionHandlerMetrics,
+    pub(crate) client_handler: TxClientHandler,
 }
 
 #[metered(registry = TxConnectionHandlerMetrics)]
@@ -30,17 +29,21 @@ impl TxConnectionHandler {
     pub async fn handle_outgoing_connections(&self, mut broker2listener: mpsc::Receiver<(SocketAddr, ControlPacket)>, stream_repository: Arc<Mutex<HashMap<SocketAddr, OwnedWriteHalf>>>) {
         loop {
             if let Some((socket, packet)) = broker2listener.recv().await {
-                trace!("Acquiring {} lock", name_of!(stream_repository));
-                let mut stream_repository = stream_repository.lock().await;
-                let client_tx = stream_repository.get_mut(&socket).expect("panic client2write_half");
-                if Self::is_disconnection(&packet).await {
-                    debug!("Handling disconnection for client {:?}", socket);
-                    client_tx.shutdown().await.expect("panic shutdown write half");
-                    stream_repository.remove(&socket);
-                } else {
-                    debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
-                    self.send_packet(&socket, &packet, client_tx).await
-                }
+                let handler = self.client_handler.clone();
+                let mut stream_repository = stream_repository.clone();
+                tokio::spawn(async move {
+                    trace!("Acquiring {} lock", name_of!(stream_repository));
+                    let mut stream_repository = stream_repository.lock().await;
+                    let client_tx = stream_repository.get_mut(&socket).expect("panic client2write_half");
+                    if Self::is_disconnection(&packet).await {
+                        debug!("Handling disconnection for client {:?}", socket);
+                        client_tx.shutdown().await.expect("panic shutdown write half");
+                        stream_repository.remove(&socket);
+                    } else {
+                        debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
+                        handler.send_packet(&socket, &packet, client_tx).await
+                    }
+                });
             }
         }
     }
@@ -51,10 +54,40 @@ impl TxConnectionHandler {
         }
         return false;
     }
+}
 
+
+#[derive(Default, Clone, Debug)]
+pub struct TxClientHandler(Arc<TxClientHandlerImpl>);
+
+impl Deref for TxClientHandler {
+    type Target = TxClientHandlerImpl;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+impl serde::Serialize for TxClientHandler {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        return self.deref().serialize(serializer);
+    }
+}
+
+#[derive(Default, Debug)]
+#[derive(serde::Serialize)]
+pub struct TxClientHandlerImpl {
+    pub(crate) encoder: MqttEncoder,
+    pub(crate) metrics: TxClientHandlerMetrics,
+
+}
+
+#[metered(registry = TxClientHandlerMetrics)]
+impl TxClientHandlerImpl {
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     async fn send_packet(&self, socket: &SocketAddr, packet: &ControlPacket, stream: &mut OwnedWriteHalf) {
-        match self.encode_packet(packet) {
+        match self.encoder.encode_packet(packet) {
             Ok(buffer) => {
                 trace!("Successfully encoded packet");
                 match self.write_buffer(&buffer, stream).await {
@@ -73,42 +106,8 @@ impl TxConnectionHandler {
         };
     }
 
-    pub fn encode_packet(&self, packet: &ControlPacket) -> EncodeResult<BytesMut> {
-        debug!("Connection::encode_packet");
-        trace!("Encoding packet: {:?} - {:?}", packet.fixed_header().packet_type(), packet);
-        let mut calculated_remaining_length = 0;
 
-        let mut payload_encoder = PayloadEncoder::new(packet.fixed_header().packet_type());
-        match packet.payload_opt() {
-            None => {}
-            Some(payload) => {
-                let remaining_length = payload_encoder.calculate_length(payload) as u64;
-                trace!("Payload Length: {:?}", remaining_length);
-                calculated_remaining_length = calculated_remaining_length + remaining_length;
-            }
-        }
-
-        let mut variable_header_encoder = VariableHeaderEncoder::new(packet.fixed_header().packet_type());
-        match packet.variable_header_opt() {
-            None => {}
-            Some(variable_header) => {
-                let remaining_length = variable_header_encoder.calculate_length(variable_header) as u64;
-                trace!("Variable Header Length: {:?}", remaining_length);
-                calculated_remaining_length = calculated_remaining_length + remaining_length;
-            }
-        }
-
-        let mut fixed_header_encoder = FixedHeaderEncoder::new();
-        let fixed_header_length = fixed_header_encoder.calculate_length(&(packet.fixed_header(), calculated_remaining_length));
-        trace!("Fixed Header Length: {:?}", fixed_header_length);
-        debug!("Control Packet Remaining Length: {:?}", calculated_remaining_length);
-        let mut buffer = BytesMut::with_capacity(fixed_header_length + calculated_remaining_length as usize);
-        fixed_header_encoder.encode(&(packet.fixed_header(), calculated_remaining_length), &mut buffer)?;
-        variable_header_encoder.encode_opt(packet.variable_header_opt(), &mut buffer)?;
-        payload_encoder.encode_opt(packet.payload_opt(), &mut buffer).expect("panic encode_opt");
-        Ok(buffer)
-    }
-
+    #[measure([Throughput, ResponseTime])]
     pub async fn write_buffer(&self, buffer: &BytesMut, stream: &mut OwnedWriteHalf) -> WriteResult {
         debug!("MQTTConnection::write");
         trace!("Buffer Length: {:?}", buffer.len());

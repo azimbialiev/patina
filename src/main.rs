@@ -9,7 +9,7 @@ use log::{info, warn};
 use log4rs;
 use tokio::sync::{mpsc, Mutex};
 
-use crate::broker::packet_handler::PacketHandler;
+use crate::broker::broker::Broker;
 use crate::connection::rx_connection_handler::RxConnectionHandler;
 use crate::connection::tx_connection_handler::TxConnectionHandler;
 use crate::metrics::metrics_registry::ServiceMetricRegistry;
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TopicHandler::handle_topics(broker2topic_handler_rx).await;
         warn!("TopicHandler thread going to die");
     });
-    let packet_handler = Arc::new(PacketHandler::default());
+    let packet_handler = Arc::new(Broker::default());
     let packet_handler_ = packet_handler.clone();
     tokio::spawn(async move {
         info!("Spawned Broker thread");
