@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
+use dashmap::DashMap;
 
 use log::{debug, error, info, trace, warn};
 use metered::{*};
@@ -26,7 +27,7 @@ pub struct RxConnectionHandler {
 
 #[metered(registry = RxConnectionHandlerMetrics)]
 impl RxConnectionHandler {
-    pub async fn handle_incoming_connections(&self, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<Mutex<HashMap<SocketAddr, OwnedWriteHalf>>>) {
+    pub async fn handle_incoming_connections(&self, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) {
         trace!("MQTTListener::process");
         info!("Starting TCP Listener on port {}", 1883);
         let address = SocketAddr::from(([127, 0, 0, 1], 1883));
@@ -45,7 +46,7 @@ impl RxConnectionHandler {
                     let stream_repository = stream_repository.clone();
                     let listener2broker = listener2broker.clone();
                     tokio::spawn(async move {
-                        stream_repository.lock().await.insert(socket, out_stream);
+                        stream_repository.insert(socket, out_stream);
                         let listener2broker = listener2broker.clone();
                         trace!("Acquiring {} lock", name_of!(stream_repository));
                         handle.handle_client(&socket, in_stream, listener2broker).await;

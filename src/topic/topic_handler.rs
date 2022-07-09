@@ -1,88 +1,59 @@
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use dashmap::{DashMap, DashSet};
 
 use log::{debug, trace};
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::Mutex;
 
 #[derive(Debug)]
-pub enum TopicCommand {
-    Subscribe {
-        client_id: String,
-        topic_filter: String,
-    },
-    Unsubscribe {
-        client_id: String,
-        topic_filter: String,
-    },
-    UnsubscribeAll {
-        client_id: String,
-    },
-    FindSubscribers {
-        topic_filter: String,
-        callback: tokio::sync::oneshot::Sender<Vec<String>>,
-    },
+pub struct TopicHandler {
+    topic2subscribers: Arc<DashMap<String, DashSet<String>>>,
 }
 
-#[derive(Debug)]
-pub struct TopicHandler {}
-
-impl TopicHandler {}
+impl Default for TopicHandler {
+    fn default() -> Self {
+        Self { topic2subscribers: Arc::new(DashMap::new()) }
+    }
+}
 
 impl TopicHandler {
-    pub async fn handle_topics(mut broker2topic_handler: Receiver<TopicCommand>) {
-        debug!("TopicHandler::handle_topics");
-        let topic2subscribers_mutex: Arc<Mutex<HashMap<String, HashSet<String>>>> = Arc::new(Mutex::new(HashMap::new()));
-        loop {
-            match broker2topic_handler.recv().await {
-                None => {}
-                Some(topic_command) => {
-                    trace!("TopicCommand: {:?}", topic_command);
-                    let mut topic2subscribers = topic2subscribers_mutex.lock().await;
-                    match topic_command {
-                        TopicCommand::Subscribe { client_id, topic_filter } => {
-                            trace!("Adding subscriber {:?} to {:?}", client_id, topic_filter);
+    pub fn subscribe(&self, client_id: &String, topic_filter: &String) {
+        trace!("Adding subscriber {:?} to {:?}", client_id, topic_filter);
 
-                            match topic2subscribers.contains_key(&topic_filter) {
-                                true => {
-                                    let subscribers = topic2subscribers.get_mut(&topic_filter).unwrap();
-                                    subscribers.insert(client_id);
-                                }
-                                false => {
-                                    let mut subscribers = HashSet::new();
-                                    subscribers.insert(client_id);
-                                    topic2subscribers.insert(topic_filter.clone(), subscribers);
-                                }
-                            };
-                        }
-                        TopicCommand::Unsubscribe { client_id, topic_filter } => {
-                            if let Some(mut subscribers) = topic2subscribers.remove(&topic_filter) {
-                                trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic_filter);
-                                subscribers.retain(|t| t.ne(&client_id));
-                                topic2subscribers.insert(topic_filter, subscribers);
-                            }
-                        }
-                        TopicCommand::UnsubscribeAll { client_id } => {
-                            for (topic, subscribers) in topic2subscribers.iter_mut() {
-                                trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic);
-                                subscribers.retain(|s| s.ne(&client_id));
-                            }
-                        }
-                        TopicCommand::FindSubscribers { topic_filter, callback } => {
-                            trace!("Finding subscribers for topic {:?} ", topic_filter);
-                            if let Some(subscribers) = topic2subscribers.get(&topic_filter) {
-                                trace!("Found {:?} subscribers for topic {:?}", subscribers, topic_filter);
-                                callback.send(subscribers.into_iter()
-                                    .map(|s| { s.clone() })
-                                    .collect::<Vec<String>>())
-                                    .expect("panic callback send");
-                            } else {
-                                callback.send(Vec::with_capacity(0)).expect("panic callback send");
-                            }
-                        }
-                    }
-                }
+        if let Some(mut subscribers) = self.topic2subscribers.get_mut(topic_filter) {
+            subscribers.insert(client_id.to_owned());
+        } else {
+            let mut subscribers = DashSet::new();
+            subscribers.insert(client_id.to_owned());
+            self.topic2subscribers.insert(topic_filter.to_owned(), subscribers);
+        }
+    }
+
+    pub fn unsubscribe(&self, client_id: &String, topic_filter: &String) {
+        self.topic2subscribers.retain(|topic, mut subscribers| {
+            if topic.eq(topic_filter) {
+                trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic_filter);
+                subscribers.retain(|s| { s.ne(client_id) });
             }
+            true
+        });
+    }
+
+    pub fn unsubscribe_all(&self, client_id: &String) {
+        self.topic2subscribers.retain(|topic, subscribers| {
+            trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic);
+            subscribers.retain(|s| s.ne(client_id));
+            true
+        });
+    }
+
+    pub fn find_subscribers(&self, topic_filter: &String) -> Vec<String> {
+        trace!("Finding subscribers for topic {:?} ", topic_filter);
+        if let Some(subscribers) = self.topic2subscribers.get(topic_filter) {
+            trace!("Found {:?} subscribers for topic {:?}", subscribers, topic_filter);
+            subscribers.clone().into_iter()
+                .map(|s| { s.clone() })
+                .collect::<Vec<String>>()
+        } else {
+            Vec::with_capacity(0)
         }
     }
 }

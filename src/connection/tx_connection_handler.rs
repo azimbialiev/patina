@@ -1,18 +1,18 @@
 use core::fmt;
-use std::collections::HashMap;
+use std::borrow::BorrowMut;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use dashmap::DashMap;
 use log::{debug, error, trace};
 use metered::{*};
 use nameof::name_of;
 use serde::Serializer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::{mpsc, Mutex};
-use tokio::sync::mpsc::error::SendError;
+use tokio::sync::{mpsc};
 use tokio::sync::mpsc::Sender;
 
 use crate::model::control_packet::ControlPacket;
@@ -29,8 +29,7 @@ pub struct TxConnectionHandler {
 
 #[metered(registry = TxConnectionHandlerMetrics)]
 impl TxConnectionHandler {
-    pub async fn handle_outgoing_connections(&self, mut broker2listener: mpsc::Receiver<(SocketAddr, ControlPacket)>, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<Mutex<HashMap<SocketAddr, OwnedWriteHalf>>>) {
-        //let listener2broker = Arc::new(listener2broker);
+    pub async fn handle_outgoing_connections(&self, mut broker2listener: mpsc::Receiver<(SocketAddr, ControlPacket)>, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) {
         loop {
             if let Some((socket, packet)) = broker2listener.recv().await {
                 let handler = self.client_handler.clone();
@@ -38,31 +37,35 @@ impl TxConnectionHandler {
                 let listener2broker = listener2broker.clone();
                 tokio::spawn(async move {
                     trace!("Acquiring {} lock", name_of!(stream_repository));
-                    let mut stream_repository = stream_repository.lock().await;
-                    let client_tx = stream_repository.get_mut(&socket).expect("panic client2write_half");
                     if Self::is_disconnection(&packet).await {
                         debug!("Handling disconnection for socket {:?}", socket);
-                        match client_tx.shutdown().await {
-                            Ok(_) => {
-                                debug!("Socket {:?} shutdown", socket);
-                            }
-                            Err(err) => {
-                                error!("Can't shutdown socket {}. {}", socket, err);
+                        if let Some(mut out_stream) = stream_repository.get_mut(&socket){
+                            match out_stream.borrow_mut().shutdown().await {
+                                Ok(_) => {
+                                    debug!("Socket {:?} shutdown", socket);
+                                }
+                                Err(err) => {
+                                    error!("Can't shutdown socket {}. {}", socket, err);
+                                }
                             }
                         }
                         stream_repository.remove(&socket);
                     } else {
                         debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
-                        match handler.send_packet(&socket, &packet, client_tx).await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                error!("Can't send packet {:?} to socket {}. Going to propagate disconnection.", packet.fixed_header().packet_type(), socket);
-                                match listener2broker.send((socket, ControlPacket::disconnect(ReasonCode::UnspecifiedError))).await {
-                                    Ok(_) => {}
-                                    Err(err) => {
-                                        error!("Can't send packet to broker. {}", err);
-                                    }
-                                };
+
+                        if let Some(mut out_stream) = stream_repository.get_mut(&socket){
+                            let mut out_stream = out_stream.borrow_mut();
+                            match handler.send_packet(&socket, &packet, out_stream).await {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    error!("Can't send packet {:?} to socket {}. Going to propagate disconnection.", packet.fixed_header().packet_type(), socket);
+                                    match listener2broker.send((socket, ControlPacket::disconnect(ReasonCode::UnspecifiedError))).await {
+                                        Ok(_) => {}
+                                        Err(err) => {
+                                            error!("Can't send packet to broker. {}", err);
+                                        }
+                                    };
+                                }
                             }
                         }
                     }
