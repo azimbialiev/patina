@@ -4,14 +4,14 @@ appenders:
     kind: console
 
 root:
-  level: trace
+  level: error
   appenders:
     - stdout
 loggers:
   patina::broker:
-    level: info
+    level: error
   patina::connection:
-    level: info
+    level: error
   patina::metrics:
     level: info
   patina::serdes:

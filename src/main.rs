@@ -34,10 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
     info!("MQTT SERVER");
-    let (listener2broker_tx, listener2broker_rx) = mpsc::channel(1000);
-    let (broker2listener_tx, broker2listener_rx) = mpsc::channel(1000);
+    let (listener2broker_tx, listener2broker_rx) = mpsc::channel(10000);
+    let (broker2listener_tx, broker2listener_rx) = mpsc::channel(10000);
     let client2write_half = Arc::new(Mutex::new(HashMap::new()));
-    let (broker2topic_handler_tx, broker2topic_handler_rx) = mpsc::channel(1000);
+    let (broker2topic_handler_tx, broker2topic_handler_rx) = mpsc::channel(10000);
 
     tokio::spawn(async move {
         info!("Spawned TopicHandler thread");
@@ -55,9 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client2write_half_ = client2write_half.clone();
     let tx_connection_handler = Arc::new(TxConnectionHandler::default());
     let tx_connection_handler_ = tx_connection_handler.clone();
+    let listener2broker_tx_ = listener2broker_tx.clone();
     tokio::spawn(async move {
         info!("Spawned TxConnectionHandler thread");
-        tx_connection_handler_.handle_outgoing_connections(broker2listener_rx, client2write_half_).await;
+        tx_connection_handler_.handle_outgoing_connections(broker2listener_rx, listener2broker_tx_, client2write_half_).await;
         warn!("TxConnectionHandler thread going to die");
     });
 

@@ -60,13 +60,13 @@ pub struct PacketHandlerImpl {
 
 #[metered(registry = PacketHandlerMetrics)]
 impl PacketHandlerImpl {
-    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
+    #[measure([HitCount, Throughput, InFlight, ResponseTime, ErrorCount])]
     pub(crate) async fn process_message(&self,
                                         socket: SocketAddr,
                                         control_packet: ControlPacket,
                                         to_listener: Sender<(SocketAddr, ControlPacket)>,
                                         to_topic_handler: Sender<TopicCommand>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), String> {
         debug!("Going to handle control packet: {:?} from client {:?} on socket {:?}",
         control_packet.fixed_header().packet_type(),match socket2id.get(&socket) {None => {String::from("<CLIENT_ID NOT REGISTERED>")}, Some(client_id) => {client_id.clone()}}, socket);
 
@@ -103,7 +103,7 @@ impl PacketHandlerImpl {
             }
             ControlPacketType::CONNACK => {}
             ControlPacketType::PUBLISH => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 if control_packet.fixed_header().qos_level() == &QoSLevel::AtLeastOnce {
                     trace!("Sending PUBACK for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                     let puback_packet = ControlPacket::puback(control_packet.variable_header().packet_identifier_opt());
@@ -133,19 +133,19 @@ impl PacketHandlerImpl {
                 send_packets(clients, control_packet, to_listener).await.expect("panic sending packets");
             }
             ControlPacketType::PUBACK => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 id2session.get_mut(&client_id).unwrap().register_puback(client_id.clone(), &control_packet);
                 // id2session.lock().await.get_mut(&client_id).unwrap().register_puback(client_id.clone(), &control_packet);
             }
             ControlPacketType::PUBREC => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 id2session.get_mut(&client_id).unwrap().register_pubrec(client_id.clone(), &control_packet);
                 trace!("Sending PUBREL for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                 let pubrel_packet = ControlPacket::pubrel(control_packet.variable_header().packet_identifier_opt());
                 send_packet(socket, pubrel_packet, to_listener).await.expect("panic send_packet");
             }
             ControlPacketType::PUBREL => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 id2session.get_mut(&client_id).unwrap().register_pubrel(client_id.clone(), &control_packet);
                 trace!("Sending PUBCOMP for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                 let pubcomp_packet = ControlPacket::pubcomp(control_packet.variable_header().packet_identifier_opt());
@@ -153,7 +153,7 @@ impl PacketHandlerImpl {
             }
             ControlPacketType::PUBCOMP => {}
             ControlPacketType::SUBSCRIBE => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 let topic_filters = control_packet.payload().topic_filters();
                 info!("SUBSCRIBE client: {:?} to topics: {:?}", client_id, topic_filters);
 
@@ -169,7 +169,7 @@ impl PacketHandlerImpl {
             }
             ControlPacketType::SUBACK => {}
             ControlPacketType::UNSUBSCRIBE => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 let topic_filters = control_packet.payload().topic_filters();
                 info!("UNSUBSCRIBE client: {:?} from topics: {:?}", client_id, topic_filters);
                 let mut reason_codes = Vec::with_capacity(topic_filters.len());
@@ -184,14 +184,14 @@ impl PacketHandlerImpl {
             }
             ControlPacketType::UNSUBACK => {}
             ControlPacketType::PINGREQ => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 debug!("PINGREQ from client {:?}", client_id);
                 let pingresp_packet = ControlPacket::pingresp();
                 send_packet(socket, pingresp_packet, to_listener).await.expect("panic send_packet");
             }
             ControlPacketType::PINGRESP => {}
             ControlPacketType::DISCONNECT => {
-                let client_id = get_client_id(&socket).await;
+                let client_id = get_client_id(&socket).await?;
                 info!("Got a DISCONNECT packet for client {:?}. Going to clean outgoing connections", client_id);
                 debug!("Disconnect reason: {:?}. Properties: {:?}", if let Some(header) = control_packet.variable_header_opt() {header.reason_code()} else {None}, if let Some(header) = control_packet.variable_header_opt() {Some(header.properties())} else {None});
                 unregister_socket(&client_id, &socket);
@@ -204,16 +204,16 @@ impl PacketHandlerImpl {
     }
 }
 
-async fn get_client_id(socket: &SocketAddr) -> String {
+async fn get_client_id(socket: &SocketAddr) -> Result<String, String>{
     trace!("Broker::get_client_id");
     match socket2id.get(socket) {
         None => {
-            panic!("Can't get client_id for socket {}", socket);
+            Err(format!("Can't get client_id for socket {}", socket))
         }
         Some(client_id) => {
-            return client_id.clone();
+            Ok(client_id.clone())
         }
-    };
+    }
 }
 
 fn unregister_socket(client_id: &String, socket: &SocketAddr) {

@@ -28,12 +28,17 @@ impl Broker {
                 None => {
                     warn!("Channel has been closed!");
                 }
-                Some((client, control_packet)) => {
+                Some((socket, control_packet)) => {
                     let to_listener = broker2listener.clone();
                     let to_topic_handler = broker2topic_handler.clone();
                     let handler = self.packet_handler.clone();
                     tokio::spawn(async move {
-                        handler.process_message(client, control_packet, to_listener, to_topic_handler).await.expect("panic process_message");
+                        match handler.process_message(socket, control_packet, to_listener, to_topic_handler).await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                error!("Can't process packet from socket {}. {}", socket, err);
+                            }
+                        };
                     });
                 }
             }

@@ -12,9 +12,12 @@ use serde::Serializer;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::Sender;
 
 use crate::model::control_packet::ControlPacket;
 use crate::model::fixed_header::ControlPacketType;
+use crate::model::reason_code::ReasonCode;
 use crate::serdes::mqtt_encoder::MqttEncoder;
 
 #[derive(Default, Debug)]
@@ -26,22 +29,42 @@ pub struct TxConnectionHandler {
 
 #[metered(registry = TxConnectionHandlerMetrics)]
 impl TxConnectionHandler {
-    pub async fn handle_outgoing_connections(&self, mut broker2listener: mpsc::Receiver<(SocketAddr, ControlPacket)>, stream_repository: Arc<Mutex<HashMap<SocketAddr, OwnedWriteHalf>>>) {
+    pub async fn handle_outgoing_connections(&self, mut broker2listener: mpsc::Receiver<(SocketAddr, ControlPacket)>, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<Mutex<HashMap<SocketAddr, OwnedWriteHalf>>>) {
+        //let listener2broker = Arc::new(listener2broker);
         loop {
             if let Some((socket, packet)) = broker2listener.recv().await {
                 let handler = self.client_handler.clone();
                 let mut stream_repository = stream_repository.clone();
+                let listener2broker = listener2broker.clone();
                 tokio::spawn(async move {
                     trace!("Acquiring {} lock", name_of!(stream_repository));
                     let mut stream_repository = stream_repository.lock().await;
                     let client_tx = stream_repository.get_mut(&socket).expect("panic client2write_half");
                     if Self::is_disconnection(&packet).await {
-                        debug!("Handling disconnection for client {:?}", socket);
-                        client_tx.shutdown().await.expect("panic shutdown write half");
+                        debug!("Handling disconnection for socket {:?}", socket);
+                        match client_tx.shutdown().await {
+                            Ok(_) => {
+                                debug!("Socket {:?} shutdown", socket);
+                            }
+                            Err(err) => {
+                                error!("Can't shutdown socket {}. {}", socket, err);
+                            }
+                        }
                         stream_repository.remove(&socket);
                     } else {
                         debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
-                        handler.send_packet(&socket, &packet, client_tx).await
+                        match handler.send_packet(&socket, &packet, client_tx).await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                error!("Can't send packet {:?} to socket {}. Going to propagate disconnection.", packet.fixed_header().packet_type(), socket);
+                                match listener2broker.send((socket, ControlPacket::disconnect(ReasonCode::UnspecifiedError))).await {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        error!("Can't send packet to broker. {}", err);
+                                    }
+                                };
+                            }
+                        }
                     }
                 });
             }
@@ -86,24 +109,26 @@ pub struct TxClientHandlerImpl {
 #[metered(registry = TxClientHandlerMetrics)]
 impl TxClientHandlerImpl {
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
-    async fn send_packet(&self, socket: &SocketAddr, packet: &ControlPacket, stream: &mut OwnedWriteHalf) {
+    async fn send_packet(&self, socket: &SocketAddr, packet: &ControlPacket, stream: &mut OwnedWriteHalf) -> Result<(), WriteError> {
         match self.encoder.encode_packet(packet) {
             Ok(buffer) => {
                 trace!("Successfully encoded packet");
                 match self.write_buffer(&buffer, stream).await {
                     Ok(_) => {
                         trace!("Successfully sent packet");
+                        Ok(())
                     }
                     Err(err) => {
                         error!("Can't send data to client {:?}: {:?}", socket, err);
+                        Err(err)
                     }
                 }
             }
             Err(err) => {
                 error!("Can't encode Control Packet: {:?}", err);
-                //return Err(format!("Can't encode Control Packet: {:?}", err));
+                Err(WriteError::EncodeError)
             }
-        };
+        }
     }
 
 
@@ -120,7 +145,7 @@ impl TxClientHandlerImpl {
                 trace!("{:?} bytes written to stream", result);
             }
             Err(e) => {
-                error!("Can't send packet: {:?}", e);
+                trace!("Can't write packets to stream: {:?}", e);
                 return Err(WriteError::SendError);
             }
         };
@@ -128,7 +153,7 @@ impl TxClientHandlerImpl {
         match stream.flush().await {
             Ok(_) => { Ok(()) }
             Err(e) => {
-                error!("Can't flush buffered writer: {:?}", e);
+                trace!("Can't flush buffered writer: {:?}", e);
                 return Err(WriteError::FlushError);
             }
         }
