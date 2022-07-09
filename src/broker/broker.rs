@@ -20,7 +20,7 @@ pub struct Broker {
 impl Broker {
     pub async fn handle_packets<'a>(&self,
                                     mut listener2broker: Receiver<(SocketAddr, ControlPacket)>,
-                                    broker2listener: Sender<(SocketAddr, ControlPacket)>,
+                                    broker2listener: Sender<(Vec<SocketAddr>, ControlPacket)>,
     ) {
         info!("Broker::handle_packets");
 

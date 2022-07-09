@@ -48,7 +48,7 @@ impl PacketHandlerImpl {
     pub(crate) async fn process_message(&self,
                                         socket: SocketAddr,
                                         control_packet: ControlPacket,
-                                        to_listener: Sender<(SocketAddr, ControlPacket)>,
+                                        to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>,
     ) -> Result<(), String> {
         debug!("Going to handle control packet: {:?} from client {:?} on socket {:?}",
         control_packet.fixed_header().packet_type(),match self.client_handler.get_client_id(&socket)
@@ -221,21 +221,18 @@ fn register_clean_session(client_id: &String) {
     id2session.insert(client_id.clone(), SessionHandler::new());
 }
 
-async fn send_packet(client: SocketAddr, packet: ControlPacket, to_listener: Sender<(SocketAddr, ControlPacket)>) -> Result<(), String> {
-    return send_packets(vec![client], packet, to_listener).await;
+async fn send_packet(socket: SocketAddr, packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) -> Result<(), String> {
+    return send_packets(vec![socket], packet, to_listener).await;
 }
 
-async fn send_packets(clients: Vec<SocketAddr>, control_packet: ControlPacket, to_listener: Sender<(SocketAddr, ControlPacket)>) -> Result<(), String> {
+async fn send_packets(sockets: Vec<SocketAddr>, control_packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) -> Result<(), String> {
     trace!("Broker::send_packets");
-    for socket in clients {
-        match to_listener.send((socket, control_packet.clone())).await {
-            Ok(_) => {
-                trace!("Successfully sent packet");
-            }
-            Err(err) => {
-                error!("Can't send data to client {:?}: {:?}", socket, err);
-                continue;
-            }
+    match to_listener.send((sockets, control_packet.clone())).await {
+        Ok(_) => {
+            trace!("Successfully sent packet");
+        }
+        Err(err) => {
+            error!("Can't send data to sockets: {:?}",  err);
         }
     }
 
