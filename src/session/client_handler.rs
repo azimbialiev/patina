@@ -1,7 +1,8 @@
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use dashmap::DashMap;
+use metered::{*};
+
 
 use log::{debug, error, info, trace, warn};
 
@@ -9,16 +10,18 @@ use log::{debug, error, info, trace, warn};
 pub struct ClientHandler {
     socket2id: Arc<DashMap<SocketAddr, String>>,
     id2socket: Arc<DashMap<String, SocketAddr>>,
+    pub(crate) metrics: ClientHandlerMetrics,
 }
 
-impl Default for ClientHandler{
+impl Default for ClientHandler {
     fn default() -> Self {
-        Self { socket2id: Arc::new(DashMap::new()), id2socket: Arc::new(DashMap::new()) }
+        Self { socket2id: Arc::new(DashMap::new()), id2socket: Arc::new(DashMap::new()), metrics: ClientHandlerMetrics::default() }
     }
 }
 
+#[metered(registry = ClientHandlerMetrics)]
 impl ClientHandler {
-
+    #[measure([HitCount, Throughput, InFlight, ResponseTime, ErrorCount])]
     pub fn get_client_id(&self, socket: &SocketAddr) -> Result<String, String> {
         match self.socket2id.get(&socket) {
             None => {
@@ -30,6 +33,7 @@ impl ClientHandler {
         }
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime, ErrorCount])]
     pub fn get_socket(&self, client_id: &String) -> Result<SocketAddr, String> {
         match self.id2socket.get(client_id) {
             None => {
@@ -41,6 +45,7 @@ impl ClientHandler {
         }
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn register(&self, socket: &SocketAddr, client_id: &String) -> Option<SocketAddr> {
         if self.socket2id.contains_key(&socket) {
             warn!("The socket {} is already registered with client_id {}. New client_id: {}",client_id, self.socket2id.get(&socket).unwrap().to_string(), socket);
@@ -67,6 +72,7 @@ impl ClientHandler {
         previous_socket
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn unregister(&self, socket: &SocketAddr, client_id: &String) {
         match self.socket2id.remove(&socket) {
             None => {
@@ -85,5 +91,32 @@ impl ClientHandler {
                 error!("Need to handle 'session taken over' case");
             }
         };
+    }
+
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
+    pub fn unregister_by_socket(&self, socket: &SocketAddr) -> Option<String> {
+        match self.get_client_id(socket) {
+            Ok(client_id) => {
+                match self.id2socket.remove(&client_id) {
+                    None => {
+                        trace!("Unregister id2socket: {:?} -> {:?}", client_id, socket);
+                    }
+                    Some(previous_socket) => {
+                        error!("Need to handle 'session taken over' case");
+                    }
+                };
+            }
+            Err(_) => {}
+        }
+        match self.socket2id.remove(&socket) {
+            None => {
+                trace!("Unregister socket2id: {:?}", socket);
+                None
+            }
+            Some((scoket, client_id)) => {
+                error!("Need to handle 'session taken over' case");
+                Some(client_id)
+            }
+        }
     }
 }

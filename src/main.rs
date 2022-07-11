@@ -8,9 +8,9 @@ use dashmap::DashMap;
 
 use log::{info, warn};
 use log4rs;
-use tokio::sync::{mpsc, Mutex};
 
 use crate::broker::broker::Broker;
+use crate::broker::packet_handler::PacketHandler;
 use crate::connection::rx_connection_handler::RxConnectionHandler;
 use crate::connection::tx_connection_handler::TxConnectionHandler;
 use crate::metrics::metrics_registry::ServiceMetricRegistry;
@@ -31,28 +31,30 @@ pub fn init_logging() {
 }
 
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
     info!("MQTT SERVER");
-    let (listener2broker_tx, listener2broker_rx) = mpsc::channel(10000);
-    let (broker2listener_tx, broker2listener_rx) = mpsc::channel(10000);
+    let (listener2broker_tx, listener2broker_rx) = tokio::sync::mpsc::channel(1000000);
+    let (broker2listener_tx, broker2listener_rx) = tokio::sync::mpsc::channel(1000000);
     let stream_repository = Arc::new(DashMap::new());
-
-    let packet_handler = Arc::new(Broker::default());
-    let packet_handler_ = packet_handler.clone();
+    let topic_handler = Arc::new(TopicHandler::default());
+    let client_handler = Arc::new(ClientHandler::default());
+    let packet_handler = Arc::new(PacketHandler::new(client_handler.clone(), topic_handler.clone()));
+    let broker = Arc::new(Broker::new(packet_handler.clone()));
+    let packet_handler_ = broker.clone();
     tokio::spawn(async move {
         info!("Spawned Broker thread");
         packet_handler_.handle_packets(
             listener2broker_rx,
-            broker2listener_tx
+            broker2listener_tx,
         ).await;
         warn!("Broker thread going to die");
     });
 
     let stream_repository_ = stream_repository.clone();
-    let tx_connection_handler = Arc::new(TxConnectionHandler::default());
+    let tx_connection_handler = Arc::new(TxConnectionHandler::new(client_handler.clone(), topic_handler.clone()));
     let tx_connection_handler_ = tx_connection_handler.clone();
     let listener2broker_tx_ = listener2broker_tx.clone();
     tokio::spawn(async move {
@@ -62,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let stream_repository_ = stream_repository.clone();
-    let rx_connection_handler = Arc::new(RxConnectionHandler::default());
+    let rx_connection_handler = Arc::new(RxConnectionHandler::new());
     let rx_connection_handler_ = rx_connection_handler.clone();
     tokio::spawn(async move {
         info!("Spawned RxConnectionHandler thread");
@@ -72,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(async move {
         info!("Spawned MetricsServer thread");
-        metrics::metrics_server::start_metrics_server(rx_connection_handler, tx_connection_handler, packet_handler).await;
+        metrics::metrics_server::start_metrics_server(rx_connection_handler, tx_connection_handler, broker).await;
         warn!("MetricsServer thread going to die");
     }
     );

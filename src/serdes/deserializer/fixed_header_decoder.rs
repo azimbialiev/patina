@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::io::ErrorKind;
 
 use bitreader::BitReader;
@@ -62,7 +63,7 @@ impl FixedHeaderDecoder {
         return Ok(remaining_length);
     }
 
-    async fn read_variable_byte_integer_as_buf(&self, reader: &mut MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<Vec<u8>> {
+    async fn read_variable_byte_integer_as_buf(&self, reader: &mut OwnedReadHalf) -> DecodeResult<Vec<u8>> {
         trace!("FixedHeaderDecoder::read_variable_byte_integer_from_stream");
         let mut multiplier: u64 = 1;
         let mut consumed_bytes = Vec::with_capacity(1);
@@ -92,7 +93,7 @@ impl FixedHeaderDecoder {
         return Ok(consumed_bytes);
     }
 
-    pub async fn decode_from_stream(&self, stream: &mut MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<FixedHeader> {
+    pub async fn decode_from_stream(&self, stream: &mut OwnedReadHalf) -> DecodeResult<FixedHeader> {
         debug!("FixedHeaderDecoder::decode_from_stream");
         let mut buffer = Vec::with_capacity(2);
         let first_byte = match stream.read_u8().await {

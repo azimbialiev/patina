@@ -1,57 +1,76 @@
+use std::borrow::BorrowMut;
+use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 use dashmap::{DashMap, DashSet};
-
+use metered::{*};
+use rayon::prelude::*;
 use log::{debug, trace};
 
 #[derive(Debug)]
 pub struct TopicHandler {
-    topic2subscribers: Arc<DashMap<String, DashSet<String>>>,
+    topic2subscribers: Arc<DashMap<String, Vec<String>>>,
+    pub(crate) metrics: TopicHandlerMetrics,
 }
 
 impl Default for TopicHandler {
     fn default() -> Self {
-        Self { topic2subscribers: Arc::new(DashMap::new()) }
+        Self { topic2subscribers: Arc::new(DashMap::new()), metrics: TopicHandlerMetrics::default() }
     }
 }
 
+#[metered(registry = TopicHandlerMetrics)]
 impl TopicHandler {
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn subscribe(&self, client_id: &String, topic_filter: &String) {
         trace!("Adding subscriber {:?} to {:?}", client_id, topic_filter);
 
-        if let Some(mut subscribers) = self.topic2subscribers.get_mut(topic_filter) {
-            subscribers.insert(client_id.to_owned());
+        if self.topic2subscribers.contains_key(topic_filter) {
+            let mut subscribers = self.topic2subscribers.get_mut(topic_filter).unwrap();
+            if subscribers.par_iter().filter(|s: &&String| { s.to_owned().eq(client_id) }).count() == 0 {
+                subscribers.push(client_id.to_owned());
+            }
         } else {
-            let mut subscribers = DashSet::new();
-            subscribers.insert(client_id.to_owned());
+            let mut subscribers = Vec::with_capacity(100);
+            subscribers.push(client_id.to_owned());
             self.topic2subscribers.insert(topic_filter.to_owned(), subscribers);
         }
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn unsubscribe(&self, client_id: &String, topic_filter: &String) {
-        self.topic2subscribers.retain(|topic, mut subscribers| {
+        self.topic2subscribers.alter_all(|topic, subscribers| {
             if topic.eq(topic_filter) {
                 trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic_filter);
-                subscribers.retain(|s| { s.ne(client_id) });
+                subscribers.to_owned()
+                    .into_par_iter()
+                    .filter(|s| { s.deref().ne(client_id) })
+                    .collect()
+            } else {
+                subscribers
             }
-            true
         });
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn unsubscribe_all(&self, client_id: &String) {
-        self.topic2subscribers.retain(|topic, subscribers| {
+        self.topic2subscribers.alter_all(|topic, subscribers| {
             trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic);
-            subscribers.retain(|s| s.ne(client_id));
-            true
+            subscribers
+                .into_par_iter()
+                .filter(|s: &String| s.to_owned().ne(client_id))
+                .collect()
         });
     }
 
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     pub fn find_subscribers(&self, topic_filter: &String) -> Vec<String> {
         trace!("Finding subscribers for topic {:?} ", topic_filter);
         if let Some(subscribers) = self.topic2subscribers.get(topic_filter) {
             trace!("Found {:?} subscribers for topic {:?}", subscribers, topic_filter);
-            subscribers.clone().into_iter()
+            subscribers.par_iter()
                 .map(|s| { s.clone() })
-                .collect::<Vec<String>>()
+                .collect()
         } else {
             Vec::with_capacity(0)
         }

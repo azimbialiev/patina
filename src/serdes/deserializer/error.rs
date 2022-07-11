@@ -1,3 +1,4 @@
+use tokio::net::tcp::OwnedReadHalf;
 
 pub type ReadResult<T> = Result<T, ReadError>;
 pub type DecodeResult<T> = Result<T, DecodeError>;

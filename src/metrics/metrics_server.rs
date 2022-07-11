@@ -5,8 +5,13 @@ use log::info;
 use warp::Filter;
 
 use crate::{Broker, RxConnectionHandler, ServiceMetricRegistry, TxConnectionHandler};
+use crate::session::session_handler::SessionHandler;
 
-pub async fn start_metrics_server(rx_connection_handler: Arc<RxConnectionHandler>, tx_connection_handler: Arc<TxConnectionHandler>, broker: Arc<Broker>){
+pub async fn start_metrics_server(
+    rx_connection_handler: Arc<RxConnectionHandler>,
+    tx_connection_handler: Arc<TxConnectionHandler>,
+    broker: Arc<Broker>,
+) {
     info!("Prometheus metrics exposed on 127.0.0.1:9000");
 
     let routes = warp::get()
@@ -14,10 +19,12 @@ pub async fn start_metrics_server(rx_connection_handler: Arc<RxConnectionHandler
         .map(move || {
             let registry = &ServiceMetricRegistry {
                 rx_client_handler: &rx_connection_handler.client_handler.metrics,
-                tx_client_handler: &tx_connection_handler.client_handler.metrics,
+                tx_client_handler: &tx_connection_handler.tx_client_handler.metrics,
                 packet_handler: &broker.packet_handler.metrics,
                 mqtt_decoder: &rx_connection_handler.client_handler.decoder.metrics,
-                mqtt_encoder: &tx_connection_handler.client_handler.encoder.metrics
+                mqtt_encoder: &tx_connection_handler.encoder.metrics,
+                client_handler: &broker.packet_handler.client_handler.metrics,
+                topic_handler: &broker.packet_handler.topic_handler.metrics,
             };
             let globals = HashMap::new();
             serde_prometheus::to_string(

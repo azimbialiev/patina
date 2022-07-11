@@ -1,3 +1,4 @@
+use std::cell::{RefCell, UnsafeCell};
 use std::io::ErrorKind;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use nameof::name_of_type;
 use serde::Serializer;
 use tokio::io::AsyncReadExt;
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::sync::MutexGuard;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::model::control_packet::ControlPacket;
 use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
@@ -48,8 +49,9 @@ pub struct MqttDecoderImpl {
 impl MqttDecoderImpl {
 
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
-    pub(crate) async fn decode_packet(&self, mut stream: MutexGuard<'_, OwnedReadHalf>) -> DecodeResult<ControlPacket> {
+    pub(crate) async fn decode_packet(&self, mut stream: Arc<Mutex<OwnedReadHalf>>) -> DecodeResult<ControlPacket> {
         debug!("{}::decode_packet", name_of_type!(MqttDecoder));
+        let mut stream = stream.lock().await;
         let fixed_header_decoder = FixedHeaderDecoder::new();
         let fixed_header = fixed_header_decoder.decode_from_stream(&mut stream).await?;
 

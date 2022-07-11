@@ -42,7 +42,7 @@ impl MqttEncoderImpl {
 
 
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
-    pub fn encode_packet(&self, packet: &ControlPacket) -> EncodeResult<BytesMut> {
+    pub fn encode_packet(&self, packet: &Arc<ControlPacket>) -> EncodeResult<BytesMut> {
         debug!("{}::encode_packet", name_of_type!(MqttEncoder));
         trace!("Encoding packet: {:?} - {:?}", packet.fixed_header().packet_type(), packet);
         let mut calculated_remaining_length = 0;

@@ -6,13 +6,13 @@ use serde::Serializer;
 use log::{debug, error, info, trace, warn};
 use metered::{*};
 use rand::Rng;
-use tokio::sync::mpsc::Sender;
 use crate::model::control_packet::ControlPacket;
 use crate::model::fixed_header::ControlPacketType;
 use crate::model::qos_level::QoSLevel;
 use crate::model::reason_code::ReasonCode;
 use crate::session::session_handler::{SessionHandler, SessionState};
 use dashmap::DashMap;
+use tokio::sync::mpsc::Sender;
 use crate::{ClientHandler, TopicHandler};
 
 lazy_static! {
@@ -23,27 +23,16 @@ lazy_static! {
     };
 }
 
-#[derive(Default, Clone, Debug)]
-pub struct PacketHandler(Arc<PacketHandlerImpl>);
 
-impl Deref for PacketHandler {
-    type Target = PacketHandlerImpl;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-
-#[derive(Default, Debug)]
-pub struct PacketHandlerImpl {
+#[derive(Debug)]
+pub struct PacketHandler {
     pub(crate) metrics: PacketHandlerMetrics,
-    client_handler: ClientHandler,
-    topic_handler: TopicHandler
+    pub(crate) client_handler: Arc<ClientHandler>,
+    pub(crate) topic_handler: Arc<TopicHandler>
 }
 
 #[metered(registry = PacketHandlerMetrics)]
-impl PacketHandlerImpl {
+impl PacketHandler {
     #[measure([HitCount, Throughput, InFlight, ResponseTime, ErrorCount])]
     pub(crate) async fn process_message(&self,
                                         socket: SocketAddr,
@@ -68,7 +57,7 @@ impl PacketHandlerImpl {
                 if let Some(previous_socket) = self.client_handler.register(&socket, &client_id) {
                     info!("Found a previous connection on socket {:?} for client_id {:?}", previous_socket, client_id);
                     let disconnect_packet = ControlPacket::disconnect(ReasonCode::SessionTakenOver);
-                    send_packet(previous_socket, disconnect_packet, to_listener.clone()).await.expect("panic send_packet");
+                    send_packet(previous_socket, disconnect_packet, to_listener.clone()).await;
                 }
 
                 let mut session_present = false;
@@ -83,7 +72,7 @@ impl PacketHandlerImpl {
                     };
                 }
                 let connack_packet = ControlPacket::connack(session_present);
-                send_packet(socket, connack_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, connack_packet, to_listener).await;
                 //TODO Check Auth
                 //TODO Check previous session using client_id
                 //TODO Check clean_start
@@ -94,11 +83,11 @@ impl PacketHandlerImpl {
                 if control_packet.fixed_header().qos_level() == &QoSLevel::AtLeastOnce {
                     trace!("Sending PUBACK for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                     let puback_packet = ControlPacket::puback(control_packet.variable_header().packet_identifier_opt());
-                    send_packet(socket, puback_packet, to_listener.clone()).await.expect("panic send_packet");
+                    send_packet(socket, puback_packet, to_listener.clone()).await;
                 } else if control_packet.fixed_header().qos_level() == &QoSLevel::ExactlyOnce {
                     trace!("Sending PUBREC for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                     let pubrec_packet = ControlPacket::pubrec(control_packet.variable_header().packet_identifier_opt());
-                    send_packet(socket, pubrec_packet, to_listener.clone()).await.expect("panic send_packet");
+                    send_packet(socket, pubrec_packet, to_listener.clone()).await;
                 }
                 let topic_filter = control_packet.variable_header().topic_name();
                 let subscribers =self.topic_handler.find_subscribers(topic_filter);
@@ -115,7 +104,7 @@ impl PacketHandlerImpl {
                     .map(|c| c.unwrap().clone())
                     .filter(|receiver| { receiver.ne(&socket) })
                     .collect();
-                send_packets(clients, control_packet, to_listener).await.expect("panic sending packets");
+                send_packets(clients, control_packet, to_listener).await;
             }
             ControlPacketType::PUBACK => {
                 let client_id = self.client_handler.get_client_id(&socket)?;
@@ -127,14 +116,14 @@ impl PacketHandlerImpl {
                 id2session.get_mut(&client_id).unwrap().register_pubrec(client_id.clone(), &control_packet);
                 trace!("Sending PUBREL for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                 let pubrel_packet = ControlPacket::pubrel(control_packet.variable_header().packet_identifier_opt());
-                send_packet(socket, pubrel_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, pubrel_packet, to_listener).await;
             }
             ControlPacketType::PUBREL => {
                 let client_id = self.client_handler.get_client_id(&socket)?;
                 id2session.get_mut(&client_id).unwrap().register_pubrel(client_id.clone(), &control_packet);
                 trace!("Sending PUBCOMP for {:?} Packet Identifier to client {:?}", control_packet.variable_header().packet_identifier_opt(), client_id);
                 let pubcomp_packet = ControlPacket::pubcomp(control_packet.variable_header().packet_identifier_opt());
-                send_packet(socket, pubcomp_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, pubcomp_packet, to_listener).await;
             }
             ControlPacketType::PUBCOMP => {}
             ControlPacketType::SUBSCRIBE => {
@@ -150,7 +139,7 @@ impl PacketHandlerImpl {
                 }
                 let suback_packet = ControlPacket::suback(control_packet.variable_header().packet_identifier_opt(), reason_codes);
 
-                send_packet(socket, suback_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, suback_packet, to_listener).await;
             }
             ControlPacketType::SUBACK => {}
             ControlPacketType::UNSUBSCRIBE => {
@@ -165,14 +154,14 @@ impl PacketHandlerImpl {
                 }
                 let unsuback_packet = ControlPacket::unsuback(control_packet.variable_header().packet_identifier_opt(), reason_codes);
 
-                send_packet(socket, unsuback_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, unsuback_packet, to_listener).await;
             }
             ControlPacketType::UNSUBACK => {}
             ControlPacketType::PINGREQ => {
                 let client_id = self.client_handler.get_client_id(&socket)?;
                 debug!("PINGREQ from client {:?}", client_id);
                 let pingresp_packet = ControlPacket::pingresp();
-                send_packet(socket, pingresp_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, pingresp_packet, to_listener).await;
             }
             ControlPacketType::PINGRESP => {}
             ControlPacketType::DISCONNECT => {
@@ -181,11 +170,14 @@ impl PacketHandlerImpl {
                 debug!("Disconnect reason: {:?}. Properties: {:?}", if let Some(header) = control_packet.variable_header_opt() {header.reason_code()} else {None}, if let Some(header) = control_packet.variable_header_opt() {Some(header.properties())} else {None});
                 self.client_handler.unregister(&socket, &client_id);
                 let disconnect_packet = ControlPacket::disconnect(ReasonCode::NormalDisconnection);
-                send_packet(socket, disconnect_packet, to_listener).await.expect("panic send_packet");
+                send_packet(socket, disconnect_packet, to_listener).await;
             }
             ControlPacketType::AUTH => {}
         };
         Ok(())
+    }
+    pub fn new(client_handler: Arc<ClientHandler>, topic_handler: Arc<TopicHandler>) -> Self {
+        Self { metrics: PacketHandlerMetrics::default(), client_handler, topic_handler }
     }
 }
 
@@ -221,11 +213,11 @@ fn register_clean_session(client_id: &String) {
     id2session.insert(client_id.clone(), SessionHandler::new());
 }
 
-async fn send_packet(socket: SocketAddr, packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) -> Result<(), String> {
+async fn send_packet(socket: SocketAddr, packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>){
     return send_packets(vec![socket], packet, to_listener).await;
 }
 
-async fn send_packets(sockets: Vec<SocketAddr>, control_packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) -> Result<(), String> {
+async fn send_packets(sockets: Vec<SocketAddr>, control_packet: ControlPacket, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) {
     trace!("Broker::send_packets");
     match to_listener.send((sockets, control_packet.clone())).await {
         Ok(_) => {
@@ -237,7 +229,6 @@ async fn send_packets(sockets: Vec<SocketAddr>, control_packet: ControlPacket, t
     }
 
     trace!("Done sending packets");
-    Ok(())
 }
 
 
