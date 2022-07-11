@@ -4,12 +4,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 use dashmap::{DashMap, DashSet};
 use metered::{*};
-use rayon::prelude::*;
 use log::{debug, trace};
 
 #[derive(Debug)]
 pub struct TopicHandler {
-    topic2subscribers: Arc<DashMap<String, Vec<String>>>,
+    topic2subscribers: Arc<DashMap<String, HashSet<String>>>,
     pub(crate) metrics: TopicHandlerMetrics,
 }
 
@@ -27,12 +26,12 @@ impl TopicHandler {
 
         if self.topic2subscribers.contains_key(topic_filter) {
             let mut subscribers = self.topic2subscribers.get_mut(topic_filter).unwrap();
-            if subscribers.par_iter().filter(|s: &&String| { s.to_owned().eq(client_id) }).count() == 0 {
-                subscribers.push(client_id.to_owned());
+            if subscribers.iter().filter(|s: &&String| { s.to_owned().eq(client_id) }).count() == 0 {
+                subscribers.insert(client_id.to_owned());
             }
         } else {
-            let mut subscribers = Vec::with_capacity(100);
-            subscribers.push(client_id.to_owned());
+            let mut subscribers = HashSet::with_capacity(100);
+            subscribers.insert(client_id.to_owned());
             self.topic2subscribers.insert(topic_filter.to_owned(), subscribers);
         }
     }
@@ -43,7 +42,7 @@ impl TopicHandler {
             if topic.eq(topic_filter) {
                 trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic_filter);
                 subscribers.to_owned()
-                    .into_par_iter()
+                    .into_iter()
                     .filter(|s| { s.deref().ne(client_id) })
                     .collect()
             } else {
@@ -57,7 +56,7 @@ impl TopicHandler {
         self.topic2subscribers.alter_all(|topic, subscribers| {
             trace!("Unsubscribing client {:?} from topic {:?}", client_id, topic);
             subscribers
-                .into_par_iter()
+                .into_iter()
                 .filter(|s: &String| s.to_owned().ne(client_id))
                 .collect()
         });
@@ -68,7 +67,7 @@ impl TopicHandler {
         trace!("Finding subscribers for topic {:?} ", topic_filter);
         if let Some(subscribers) = self.topic2subscribers.get(topic_filter) {
             trace!("Found {:?} subscribers for topic {:?}", subscribers, topic_filter);
-            subscribers.par_iter()
+            subscribers.iter()
                 .map(|s| { s.clone() })
                 .collect()
         } else {
