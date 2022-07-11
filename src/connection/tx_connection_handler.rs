@@ -30,57 +30,67 @@ pub struct TxConnectionHandler {
 
 #[metered(registry = TxConnectionHandlerMetrics)]
 impl TxConnectionHandler {
-    pub async fn handle_outgoing_connections(&self, mut broker2listener: Receiver<(Vec<SocketAddr>, ControlPacket)>, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) {
-        loop {
-            if let Some((sockets, packet)) = broker2listener.recv().await {
-                let encoder = self.encoder.clone();
-                let tx_client_handler = self.tx_client_handler.clone();
-                let client_handler = self.client_handler.clone();
-                let topic_handler = self.topic_handler.clone();
-                let mut stream_repository = stream_repository.clone();
-                let listener2broker = listener2broker.clone();
-                tokio::spawn(async move {
-                    let packet = Arc::new(packet);
-                    match encoder.encode_packet(&packet) {
-                        Ok(encoded_packet) => {
-                            let encoded_packet = Arc::new(encoded_packet);
-                            for socket in sockets {
-                                let encoded_packet = encoded_packet.clone();
-                                let packet = packet.clone();
-                                let tx_client_handler = tx_client_handler.clone();
-                                let client_handler = client_handler.clone();
-                                let topic_handler = topic_handler.clone();
-                                let mut stream_repository = stream_repository.clone();
-                                let listener2broker = listener2broker.clone();
+    #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+    pub async fn handle_outgoing_connections(&self, mut broker2listener: Receiver<(Vec<SocketAddr>, ControlPacket)>, listener2broker: Sender<(SocketAddr, ControlPacket)>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) -> Result<(), Box<dyn std::error::Error>> {
+        let encoder = self.encoder.clone();
+        let tx_client_handler = self.tx_client_handler.clone();
+        let client_handler = self.client_handler.clone();
+        let topic_handler = self.topic_handler.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some((sockets, packet)) = broker2listener.recv().await {
+                    let encoder = encoder.clone();
+                    let tx_client_handler = tx_client_handler.clone();
+                    let client_handler = client_handler.clone();
+                    let topic_handler = topic_handler.clone();
+                    let mut stream_repository = stream_repository.clone();
+                    let listener2broker = listener2broker.clone();
+                    tokio::spawn(async move {
+                        let packet = Arc::new(packet);
+                        match encoder.encode_packet(&packet) {
+                            Ok(encoded_packet) => {
+                                let encoded_packet = Arc::new(encoded_packet);
+                                for socket in sockets {
+                                    let encoded_packet = encoded_packet.clone();
+                                    let packet = packet.clone();
+                                    let tx_client_handler = tx_client_handler.clone();
+                                    let client_handler = client_handler.clone();
+                                    let topic_handler = topic_handler.clone();
+                                    let mut stream_repository = stream_repository.clone();
+                                    let listener2broker = listener2broker.clone();
 
-                                tokio::spawn(async move {
-                                    trace!("Acquiring {} lock", name_of!(stream_repository));
-                                    if Self::is_disconnection(&packet).await {
-                                        debug!("Handling disconnection for socket {:?}", socket);
-                                        Self::clean_after_disconnection(&socket, &stream_repository, &client_handler, &topic_handler).await;
-                                    } else {
-                                        debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
+                                    tokio::spawn(async move {
+                                        trace!("Acquiring {} lock", name_of!(stream_repository));
+                                        if Self::is_disconnection(&packet).await {
+                                            debug!("Handling disconnection for socket {:?}", socket);
+                                            Self::clean_after_disconnection(&socket, &stream_repository, &client_handler, &topic_handler).await;
+                                        } else {
+                                            debug!("Sending packet {:?} to {:?}", packet.fixed_header().packet_type(), socket);
 
-                                        if let Some(mut out_stream) = stream_repository.get_mut(&socket) {
-                                            let mut out_stream = out_stream.borrow_mut();
-                                            match tx_client_handler.send_packet(&socket, &encoded_packet.clone(), out_stream).await {
-                                                Ok(_) => {}
-                                                Err(err) => {
-                                                    error!("Can't send packet {:?} to socket {}. {}", packet.fixed_header().packet_type(), socket, err);
+                                            if let Some(mut out_stream) = stream_repository.get_mut(&socket) {
+                                                let mut out_stream = out_stream.borrow_mut();
+                                                match tx_client_handler.send_packet(&socket, &encoded_packet, out_stream).await {
+                                                    Ok(_) => {}
+                                                    Err(err) => {
+                                                        error!("Can't send packet {:?} to socket {}. {}", packet.fixed_header().packet_type(), socket, err);
+                                                        Self::clean_after_disconnection(&socket, &stream_repository, &client_handler, &topic_handler).await;
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                });
+                                    });
+                                }
+                            }
+                            Err(err) => {
+                                panic!("Can't encode Control Packet: {:?}", err);
                             }
                         }
-                        Err(err) => {
-                            panic!("Can't encode Control Packet: {:?}", err);
-                        }
-                    }
-                });
+                    });
+                }
             }
-        }
+        }).await.expect("panic tx_connection_handler");
+        Ok(())
+
     }
 
     async fn clean_after_disconnection(socket: &SocketAddr, stream_repository: &Arc<DashMap<SocketAddr, OwnedWriteHalf>>, client_handler: &Arc<ClientHandler>, topic_handler: &Arc<TopicHandler>) {

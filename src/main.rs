@@ -4,13 +4,14 @@ extern crate lazy_static;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread;
 use dashmap::DashMap;
 
 use log::{info, warn};
 use log4rs;
 
 use crate::broker::broker::Broker;
-use crate::broker::packet_handler::PacketHandler;
+use crate::broker::packet_dispatcher::PacketDispatcher;
 use crate::connection::rx_connection_handler::RxConnectionHandler;
 use crate::connection::tx_connection_handler::TxConnectionHandler;
 use crate::metrics::metrics_registry::ServiceMetricRegistry;
@@ -31,8 +32,8 @@ pub fn init_logging() {
 }
 
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
+fn main() {
     init_logging();
 
     info!("MQTT SERVER");
@@ -41,46 +42,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream_repository = Arc::new(DashMap::new());
     let topic_handler = Arc::new(TopicHandler::default());
     let client_handler = Arc::new(ClientHandler::default());
-    let packet_handler = Arc::new(PacketHandler::new(client_handler.clone(), topic_handler.clone()));
+    let packet_handler = Arc::new(PacketDispatcher::new(client_handler.clone(), topic_handler.clone(), broker2listener_tx));
     let broker = Arc::new(Broker::new(packet_handler.clone()));
     let packet_handler_ = broker.clone();
-    tokio::spawn(async move {
+
+    let broker_handle = thread::spawn(move || {
         info!("Spawned Broker thread");
         packet_handler_.handle_packets(
             listener2broker_rx,
-            broker2listener_tx,
-        ).await;
-        warn!("Broker thread going to die");
+        );
     });
+
+    // tokio::spawn(async move {
+    //     warn!("Broker thread going to die");
+    //
+    // });
 
     let stream_repository_ = stream_repository.clone();
     let tx_connection_handler = Arc::new(TxConnectionHandler::new(client_handler.clone(), topic_handler.clone()));
     let tx_connection_handler_ = tx_connection_handler.clone();
     let listener2broker_tx_ = listener2broker_tx.clone();
-    tokio::spawn(async move {
+
+    let tx_connections_handle = thread::spawn(move || {
         info!("Spawned TxConnectionHandler thread");
-        tx_connection_handler_.handle_outgoing_connections(broker2listener_rx, listener2broker_tx_, stream_repository_).await;
-        warn!("TxConnectionHandler thread going to die");
+        tx_connection_handler_.handle_outgoing_connections(broker2listener_rx, listener2broker_tx_, stream_repository_);
     });
+
+    // tokio::spawn(async move {
+    //
+    //     warn!("TxConnectionHandler thread going to die");
+    // });
 
     let stream_repository_ = stream_repository.clone();
     let rx_connection_handler = Arc::new(RxConnectionHandler::new());
     let rx_connection_handler_ = rx_connection_handler.clone();
-    tokio::spawn(async move {
+
+    let rx_connection_handle = thread::spawn(move || {
         info!("Spawned RxConnectionHandler thread");
-        rx_connection_handler_.handle_incoming_connections(listener2broker_tx, stream_repository_).await;
-        warn!("RxConnectionHandler thread going to die");
+        rx_connection_handler_.handle_incoming_connections(listener2broker_tx, stream_repository_);
     });
 
-    tokio::spawn(async move {
+    // tokio::spawn(async move {
+    //
+    //     warn!("RxConnectionHandler thread going to die");
+    // });
+    let metrics_handle = thread::spawn(move || {
         info!("Spawned MetricsServer thread");
-        metrics::metrics_server::start_metrics_server(rx_connection_handler, tx_connection_handler, broker).await;
-        warn!("MetricsServer thread going to die");
-    }
-    );
+        metrics::metrics_server::start_metrics_server(rx_connection_handler, tx_connection_handler, broker);
+    });
 
 
-    loop {}
+    broker_handle.join().expect("");
+    tx_connections_handle.join().expect("");
+    rx_connection_handle.join().expect("");
+    metrics_handle.join().expect("");
+
+
+    // tokio::spawn(async move {
+    //
+    //     warn!("MetricsServer thread going to die");
+    // }
+    // );
 }
 
 

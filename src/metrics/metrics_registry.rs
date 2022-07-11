@@ -1,4 +1,13 @@
-use crate::broker::packet_handler::PacketHandlerMetrics;
+use crate::broker::packet_dispatcher::{*};
+use crate::broker::handler::{*};
+use crate::broker::handler::connect_handler::ConnectHandlerMetrics;
+use crate::broker::handler::disconnect_handler::DisconnectHandlerMetrics;
+use crate::broker::handler::pingreq_handler::PingreqHandlerMetrics;
+use crate::broker::handler::publish_handler::PublishHandlerMetrics;
+use crate::broker::handler::pubrec_handler::PubrecHandlerMetrics;
+use crate::broker::handler::pubrel_handler::PubrelHandlerMetrics;
+use crate::broker::handler::subscribe_handler::SubscribeHandlerMetrics;
+use crate::broker::handler::unsubscribe_handler::UnsubscribeHandlerMetrics;
 use crate::session::client_handler::{ClientHandlerMetrics};
 use crate::connection::rx_connection_handler::RxClientHandlerMetrics;
 use crate::connection::tx_connection_handler::TxClientHandlerMetrics;
@@ -12,10 +21,17 @@ use crate::topic::topic_handler::TopicHandlerMetrics;
 pub struct ServiceMetricRegistry<'a> {
     pub(crate) rx_client_handler: &'a RxClientHandlerMetrics,
     pub(crate) tx_client_handler: &'a TxClientHandlerMetrics,
-    pub(crate) packet_handler: &'a PacketHandlerMetrics,
+    pub(crate) packet_dispatcher: &'a PacketDispatcherMetrics,
     pub(crate) mqtt_decoder: &'a MqttDecoderMetrics,
     pub(crate) mqtt_encoder: &'a MqttEncoderMetrics,
     pub(crate) client_handler: &'a ClientHandlerMetrics,
-    //pub(crate) session_handler: &'a ClientHandlerMetrics,
-    pub(crate) topic_handler: &'a TopicHandlerMetrics
+    pub(crate) topic_handler: &'a TopicHandlerMetrics,
+    pub(crate) connect_handler: &'a ConnectHandlerMetrics,
+    pub(crate) disconnect_handler: &'a DisconnectHandlerMetrics,
+    pub(crate) pingreq_handler: &'a PingreqHandlerMetrics,
+    pub(crate) publish_handler: &'a PublishHandlerMetrics,
+    pub(crate) pubrec_handler: &'a PubrecHandlerMetrics,
+    pub(crate) pubrel_handler: &'a PubrelHandlerMetrics,
+    pub(crate) subscribe_handler: &'a SubscribeHandlerMetrics,
+    pub(crate) unsubscribe_handler: &'a UnsubscribeHandlerMetrics
 }
