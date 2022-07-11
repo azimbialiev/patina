@@ -19,7 +19,7 @@ use crate::serdes::mqtt_decoder::MqttDecoder;
 #[derive(Debug)]
 pub struct RxConnectionHandler {
     pub(crate) metrics: RxConnectionHandlerMetrics,
-    pub(crate) client_handler: Arc<RxClientHandler>,
+    pub(crate) rx_client_handler: Arc<RxClientHandler>,
 }
 
 #[metered(registry = RxConnectionHandlerMetrics)]
@@ -38,12 +38,15 @@ impl RxConnectionHandler {
                 Ok((stream, socket)) => {
                     info!("New connection request from {:?}", socket);
 
-                    let handle = self.client_handler.clone();
+                    let rx_client_handler = self.rx_client_handler.clone();
                     let (in_stream, out_stream) = stream.into_split();
                     let stream_repository = stream_repository.clone();
                     let listener2broker = listener2broker.clone();
-                    stream_repository.insert(socket, out_stream);
-                    handle.handle_client(&socket, in_stream, listener2broker.clone()).await;
+                    tokio::spawn(async move {
+                        stream_repository.insert(socket, out_stream);
+                        rx_client_handler.handle_client(&socket, in_stream, listener2broker.clone()).await;
+                    });
+
                 }
                 Err(error) => {
                     error!("Can't handle TCP Stream {:?}", error);
@@ -53,7 +56,7 @@ impl RxConnectionHandler {
     }
 
     pub fn new() -> Self {
-        Self { metrics: RxConnectionHandlerMetrics::default(), client_handler: Arc::new(RxClientHandler::default()) }
+        Self { metrics: RxConnectionHandlerMetrics::default(), rx_client_handler: Arc::new(RxClientHandler::default()) }
     }
 }
 
