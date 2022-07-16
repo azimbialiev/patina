@@ -79,9 +79,9 @@ impl RxClientHandler {
     async fn handle_client(&self, socket: &SocketAddr,mut in_stream: OwnedReadHalf, listener2broker: Arc<Sender<(SocketAddr, ControlPacket)>>) {
         debug!("START - handle_client({})", socket);
         let socket = socket.clone();
-        let decode = self.decoder.clone();
+        let decoder = self.decoder.clone();
         loop {
-            match decode.decode_packet(in_stream).await {
+            match decoder.decode_packet(in_stream).await {
                 Ok((ret_stream, control_packet)) => {
                     in_stream = ret_stream;
                     debug!("Got new Control Packet from client: {:?}", socket);

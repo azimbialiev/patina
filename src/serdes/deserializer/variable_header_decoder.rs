@@ -1,6 +1,6 @@
 use bitreader::BitReader;
 use log::{debug, error, trace};
-
+use metered::{*};
 use crate::model::fixed_header::{ControlPacketType, FixedHeader};
 use crate::model::qos_level::QoSLevel;
 use crate::model::reason_code::ReasonCode;
@@ -9,17 +9,127 @@ use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
 use crate::serdes::deserializer::property_decoder::PropertyDecoder;
 use crate::serdes::r#trait::decoder::Decoder;
 
+#[derive(Default, Debug)]
 pub struct VariableHeaderDecoder {
-    fixed_header: Box<FixedHeader>,
+    pub(crate) metrics: VariableHeaderDecoderMetrics,
+    pub(crate) property_decoder: PropertyDecoder,
+
 }
 
+#[metered(registry = VariableHeaderDecoderMetrics)]
 impl VariableHeaderDecoder {
-    pub fn new(fixed_header: Box<FixedHeader>) -> Self {
-        VariableHeaderDecoder { fixed_header }
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
+    pub fn decode_with_header(&self, fixed_header: &FixedHeader, reader: &mut BitReader) -> DecodeResult<Option<VariableHeader>> {
+        debug!("VariableHeaderDecoder::decode");
+        return Ok(match fixed_header.packet_type() {
+            ControlPacketType::RESERVED => { None }
+            ControlPacketType::CONNECT => {
+                let start_position = reader.position();
+
+                let protocol_name = self.read_protocol_name(reader)?;
+                let protocol_version = self.read_protocol_version(reader)?;
+                let connect_flags = self.read_connect_flags(reader)?;
+                let keep_alive = self.read_keep_alive(reader)?;
+                let properties = self.property_decoder.decode(reader)?;
+                trace!("Variable Header consumed {:?} bytes from stream", (reader.position() - start_position) / 8);
+
+
+                Some(VariableHeader::from_connect(Some(protocol_name), Some(protocol_version), Some(connect_flags), Some(keep_alive), properties))
+            }
+            ControlPacketType::CONNACK => { None }
+            ControlPacketType::PUBLISH => {
+                let topic_name = match self.read_utf8_string(reader) {
+                    Ok(result) => { result }
+                    Err(err) => {
+                        error!("Can't decode Topic Name: {:?}", err);
+                        return Err(DecodeError::TopicName { cause: err.cause() });
+                    }
+                };
+                trace!("Extracted Topic Name: {:?}", topic_name);
+                let mut packet_identifier = None;
+
+                match fixed_header.qos_level() {
+                    QoSLevel::AtMostOnce => {}
+                    _ => {
+                        packet_identifier = Some(self.read_packet_identifier(reader)?);
+                        trace!("Extracted Packet Identifier: {:?}", packet_identifier);
+                    }
+                }
+
+                let properties = self.property_decoder.decode(reader)?;
+                Some(VariableHeader::from_publish(packet_identifier, Some(topic_name), properties))
+            }
+            ControlPacketType::PUBACK => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let mut reason_code = None;
+                if reader.remaining() > 8 {
+                    reason_code = Some(self.read_reason_code(reader)?);
+                }
+                let mut properties = vec![];
+                if reader.remaining() > 8 {
+                    properties = self.property_decoder.decode(reader)?;
+                }
+                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
+            }
+            ControlPacketType::PUBREC => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let mut reason_code = None;
+                if reader.remaining() > 8 {
+                    reason_code = Some(self.read_reason_code(reader)?);
+                }
+                let mut properties = vec![];
+                if reader.remaining() > 8 {
+                    properties = self.property_decoder.decode(reader)?;
+                }
+                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
+            }
+            ControlPacketType::PUBREL => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let mut reason_code = None;
+                if reader.remaining() > 8 {
+                    reason_code = Some(self.read_reason_code(reader)?);
+                }
+                let mut properties = vec![];
+                if reader.remaining() > 8 {
+                    properties = self.property_decoder.decode(reader)?;
+                }
+                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
+            }
+            ControlPacketType::PUBCOMP => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let mut reason_code = None;
+                if reader.remaining() > 8 {
+                    reason_code = Some(self.read_reason_code(reader)?);
+                }
+                let mut properties = vec![];
+                if reader.remaining() > 8 {
+                    properties = self.property_decoder.decode(reader)?;
+                }
+                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
+            }
+            ControlPacketType::SUBSCRIBE => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let properties = self.property_decoder.decode(reader)?;
+                Some(VariableHeader::from_sub_unsub(Some(packet_identifier), properties))
+            }
+            ControlPacketType::SUBACK => { None }
+            ControlPacketType::UNSUBSCRIBE => {
+                let packet_identifier = self.read_packet_identifier(reader)?;
+                let properties = self.property_decoder.decode(reader)?;
+                Some(VariableHeader::from_sub_unsub(Some(packet_identifier), properties))
+            }
+            ControlPacketType::UNSUBACK => { None }
+            ControlPacketType::PINGREQ => { None }
+            ControlPacketType::PINGRESP => { None }
+            ControlPacketType::DISCONNECT => {
+                let reason_code = self.read_reason_code(reader)?;
+                let properties = self.property_decoder.decode(reader)?;
+                Some(VariableHeader::from_disconnect(reason_code, properties))
+            }
+            ControlPacketType::AUTH => { None }
+        });
     }
-}
 
-impl VariableHeaderDecoder {
     fn read_protocol_name(&self, reader: &mut BitReader) -> DecodeResult<String> {
         trace!("VariableHeaderDecoder::read_protocol_name");
         let protocol_name = self.read_utf8_string(reader)?;
@@ -215,114 +325,6 @@ impl VariableHeaderDecoder {
 
 impl Decoder<Option<VariableHeader>> for VariableHeaderDecoder {
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<Option<VariableHeader>> {
-        debug!("VariableHeaderDecoder::decode");
-        let property_decoder = PropertyDecoder::new();
-        return Ok(match self.fixed_header.packet_type() {
-            ControlPacketType::RESERVED => { None }
-            ControlPacketType::CONNECT => {
-                let start_position = reader.position();
-
-                let protocol_name = self.read_protocol_name(reader)?;
-                let protocol_version = self.read_protocol_version(reader)?;
-                let connect_flags = self.read_connect_flags(reader)?;
-                let keep_alive = self.read_keep_alive(reader)?;
-                let properties = property_decoder.decode(reader)?;
-                trace!("Variable Header consumed {:?} bytes from stream", (reader.position() - start_position) / 8);
-
-
-                Some(VariableHeader::from_connect(Some(protocol_name), Some(protocol_version), Some(connect_flags), Some(keep_alive), properties))
-            }
-            ControlPacketType::CONNACK => { None }
-            ControlPacketType::PUBLISH => {
-                let topic_name = match self.read_utf8_string(reader) {
-                    Ok(result) => { result }
-                    Err(err) => {
-                        error!("Can't decode Topic Name: {:?}", err);
-                        return Err(DecodeError::TopicName { cause: err.cause() });
-                    }
-                };
-                trace!("Extracted Topic Name: {:?}", topic_name);
-                let mut packet_identifier = None;
-
-                match self.fixed_header.qos_level() {
-                    QoSLevel::AtMostOnce => {}
-                    _ => {
-                        packet_identifier = Some(self.read_packet_identifier(reader)?);
-                        trace!("Extracted Packet Identifier: {:?}", packet_identifier);
-                    }
-                }
-
-                let properties = property_decoder.decode(reader)?;
-                Some(VariableHeader::from_publish(packet_identifier, Some(topic_name), properties))
-            }
-            ControlPacketType::PUBACK => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let mut reason_code = None;
-                if reader.remaining() > 8 {
-                    reason_code = Some(self.read_reason_code(reader)?);
-                }
-                let mut properties = vec![];
-                if reader.remaining() > 8 {
-                    properties = property_decoder.decode(reader)?;
-                }
-                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
-            }
-            ControlPacketType::PUBREC => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let mut reason_code = None;
-                if reader.remaining() > 8 {
-                    reason_code = Some(self.read_reason_code(reader)?);
-                }
-                let mut properties = vec![];
-                if reader.remaining() > 8 {
-                    properties = property_decoder.decode(reader)?;
-                }
-                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
-            }
-            ControlPacketType::PUBREL => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let mut reason_code = None;
-                if reader.remaining() > 8 {
-                    reason_code = Some(self.read_reason_code(reader)?);
-                }
-                let mut properties = vec![];
-                if reader.remaining() > 8 {
-                    properties = property_decoder.decode(reader)?;
-                }
-                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
-            }
-            ControlPacketType::PUBCOMP => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let mut reason_code = None;
-                if reader.remaining() > 8 {
-                    reason_code = Some(self.read_reason_code(reader)?);
-                }
-                let mut properties = vec![];
-                if reader.remaining() > 8 {
-                    properties = property_decoder.decode(reader)?;
-                }
-                Some(VariableHeader::from_pub_ack_rel_comp(Some(packet_identifier), reason_code, vec![]))
-            }
-            ControlPacketType::SUBSCRIBE => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let properties = property_decoder.decode(reader)?;
-                Some(VariableHeader::from_sub_unsub(Some(packet_identifier), properties))
-            }
-            ControlPacketType::SUBACK => { None }
-            ControlPacketType::UNSUBSCRIBE => {
-                let packet_identifier = self.read_packet_identifier(reader)?;
-                let properties = property_decoder.decode(reader)?;
-                Some(VariableHeader::from_sub_unsub(Some(packet_identifier), properties))
-            }
-            ControlPacketType::UNSUBACK => { None }
-            ControlPacketType::PINGREQ => { None }
-            ControlPacketType::PINGRESP => { None }
-            ControlPacketType::DISCONNECT => {
-                let reason_code = self.read_reason_code(reader)?;
-                let properties = property_decoder.decode(reader)?;
-                Some(VariableHeader::from_disconnect(reason_code, properties))
-            }
-            ControlPacketType::AUTH => { None }
-        });
+        unimplemented!()
     }
 }

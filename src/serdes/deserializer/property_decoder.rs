@@ -1,18 +1,18 @@
 use bitreader::BitReader;
 use log::{debug, error, trace};
-
+use metered::{*};
 use crate::model::variable_header::Property;
 use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
 use crate::serdes::r#trait::decoder::Decoder;
 
-pub struct PropertyDecoder {}
+#[derive(Default, Debug)]
+pub struct PropertyDecoder {
+    pub(crate) metrics: PropertyDecoderMetrics,
+
+}
 
 
 impl PropertyDecoder {
-    pub fn new() -> Self {
-        PropertyDecoder {}
-    }
-
     fn read_property_length(&self, reader: &mut BitReader) -> DecodeResult<u64> {
         trace!("PropertyDecoder::read_property_length");
 
@@ -202,7 +202,9 @@ impl PropertyDecoder {
     }
 }
 
+#[metered(registry = PropertyDecoderMetrics)]
 impl Decoder<Vec<Property>> for PropertyDecoder {
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<Vec<Property>> {
         debug!("PropertyDecoder::decode");
         let mut properties: Vec<Property> = Vec::new();

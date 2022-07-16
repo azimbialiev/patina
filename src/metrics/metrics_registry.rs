@@ -9,6 +9,9 @@ use crate::broker::handler::unsubscribe_handler::UnsubscribeHandlerMetrics;
 use crate::broker::packet_dispatcher::{*};
 use crate::connection::rx_connection_handler::RxClientHandlerMetrics;
 use crate::connection::tx_connection_handler::TxClientHandlerMetrics;
+use crate::serdes::deserializer::fixed_header_decoder::FixedHeaderDecoderMetrics;
+use crate::serdes::deserializer::payload_decoder::PayloadDecoderMetrics;
+use crate::serdes::deserializer::variable_header_decoder::VariableHeaderDecoderMetrics;
 use crate::serdes::mqtt_decoder::MqttDecoderMetrics;
 use crate::serdes::mqtt_encoder::MqttEncoderMetrics;
 use crate::session::client_handler::ClientHandlerMetrics;
@@ -22,6 +25,9 @@ pub struct ServiceMetricRegistry<'a> {
     pub(crate) tx_client_handler: &'a TxClientHandlerMetrics,
     pub(crate) packet_dispatcher: &'a PacketDispatcherMetrics,
     pub(crate) mqtt_decoder: &'a MqttDecoderMetrics,
+    pub(crate) fixed_header_decoder: &'a FixedHeaderDecoderMetrics,
+    pub(crate) variable_header_decoder: &'a VariableHeaderDecoderMetrics,
+    pub(crate) payload_decoder: &'a PayloadDecoderMetrics,
     pub(crate) mqtt_encoder: &'a MqttEncoderMetrics,
     pub(crate) client_handler: &'a ClientHandlerMetrics,
     pub(crate) topic_handler: &'a TopicHandlerMetrics,

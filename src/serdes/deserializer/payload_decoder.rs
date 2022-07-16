@@ -1,7 +1,7 @@
 use bitreader::{BitReader, BitReaderError};
 use log::{debug, error, trace};
-
-use crate::model::fixed_header::ControlPacketType;
+use metered::{*};
+use crate::model::fixed_header::{ControlPacketType, FixedHeader};
 use crate::model::payload::Payload;
 use crate::model::qos_level::QoSLevel;
 use crate::model::topic::{RetainHandling, TopicFilter};
@@ -10,21 +10,110 @@ use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
 use crate::serdes::deserializer::property_decoder::PropertyDecoder;
 use crate::serdes::r#trait::decoder::Decoder;
 
+#[derive(Default, Debug)]
 pub struct PayloadDecoder {
-    packet_type: ControlPacketType,
-    variable_header: Option<VariableHeader>,
+    pub(crate) metrics: PayloadDecoderMetrics,
+    pub(crate) property_decoder: PropertyDecoder,
+
 }
 
+#[metered(registry = PayloadDecoderMetrics)]
 impl PayloadDecoder {
-    pub fn variable_header(&self) -> &VariableHeader {
-        self.variable_header.as_ref().unwrap()
-    }
-}
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
+    pub fn decode_with_headers(&self, fixed_header: &FixedHeader, variable_header: &VariableHeader, reader: &mut BitReader) -> DecodeResult<Option<Payload>> {
+        debug!("PayloadDecoder::decode");
+        return Ok(match fixed_header.packet_type() {
+            ControlPacketType::RESERVED => { None }
+            ControlPacketType::CONNECT => {
+                let client_id = self.read_utf8_string(reader)?;
+                trace!("Extracted Client ID: {:?}", client_id);
 
+                let connect_flags = variable_header.connect_flags();
 
-impl PayloadDecoder {
-    pub fn new(packet_type: ControlPacketType, variable_header: Option<VariableHeader>) -> Self {
-        PayloadDecoder { packet_type, variable_header }
+                let mut will_properties: Option<Vec<Property>> = None;
+                let mut will_topic: Option<String> = None;
+                let mut will_payload: Option<Vec<u8>> = None;
+
+                if connect_flags.will_flag() {
+                    will_properties = Option::from(self.property_decoder.decode(reader)?);
+                    trace!("Extracted Will Properties: {:?}", will_properties);
+
+                    will_topic = Option::from(self.read_utf8_string(reader)?);
+                    trace!("Extracted Will Topic: {:?}", will_topic);
+
+                    will_payload = Option::from(self.read_binary_data(reader)?);
+                    trace!("Extracted Will Payload: {:?}", will_payload);
+                }
+
+                let mut username: Option<String> = None;
+                if connect_flags.username_flag() {
+                    username = Option::from(self.read_utf8_string(reader)?);
+                    trace!("Extracted Username: {:?}", username);
+                }
+
+                let mut password: Option<String> = None;
+                if connect_flags.password_flag() {
+                    password = Option::from(self.read_utf8_string(reader)?);
+                    trace!("Extracted Password: {:?}", password);
+                }
+
+                Option::from(Payload::from_connect(Some(client_id), will_properties, will_topic, will_payload, username, password))
+            }
+            ControlPacketType::CONNACK => { None }
+            ControlPacketType::PUBLISH => {
+                let mut data = Vec::with_capacity((reader.remaining() / 8) as usize);
+                while data.len() != data.capacity() {
+                    data.push(
+                        match reader.read_u8(8) {
+                            Ok(result) => { result }
+                            Err(err) => {
+                                error!("Can't read payload: {:?}", err);
+                                return match err {
+                                    BitReaderError::NotEnoughData {
+                                        position,
+                                        length,
+                                        requested, } => {
+                                        Err(DecodeError::Payload { cause: ReadError::NotEnoughData { position, length, requested } })
+                                    }
+                                    BitReaderError::TooManyBitsForType {
+                                        position,
+                                        requested,
+                                        allowed, } => {
+                                        Err(DecodeError::Payload { cause: ReadError::TooManyBitsForType { position, requested, allowed } })
+                                    }
+                                };
+                            }
+                        })
+                }
+                Option::from(Payload::from_publish(Option::from(data)))
+            }
+            ControlPacketType::PUBACK => { None }
+            ControlPacketType::PUBREC => { None }
+            ControlPacketType::PUBREL => { None }
+            ControlPacketType::PUBCOMP => { None }
+            ControlPacketType::SUBSCRIBE => {
+                let mut topic_filters = Vec::new();
+                while reader.remaining() != 0 {
+                    let topic_filter = self.read_topic_filter(reader)?;
+                    topic_filters.push(topic_filter);
+                }
+                Option::from(Payload::from_sub_unsub(topic_filters))
+            }
+            ControlPacketType::SUBACK => { None }
+            ControlPacketType::UNSUBSCRIBE => {
+                let mut topic_filters = Vec::new();
+                while reader.remaining() != 0 {
+                    let topic_path = self.read_topic_path(reader)?;
+                    topic_filters.push(TopicFilter::from_unsubscribe(topic_path));
+                }
+                Option::from(Payload::from_sub_unsub(topic_filters))
+            }
+            ControlPacketType::UNSUBACK => { None }
+            ControlPacketType::PINGREQ => { None }
+            ControlPacketType::PINGRESP => { None }
+            ControlPacketType::DISCONNECT => { None }
+            ControlPacketType::AUTH => { None }
+        });
     }
 
     fn read_topic_path(&self, reader: &mut BitReader) -> DecodeResult<String> {
@@ -110,100 +199,7 @@ impl PayloadDecoder {
 
 impl Decoder<Option<Payload>> for PayloadDecoder {
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<Option<Payload>> {
-        debug!("PayloadDecoder::decode");
-        return Ok(match self.packet_type {
-            ControlPacketType::RESERVED => { None }
-            ControlPacketType::CONNECT => {
-                let client_id = self.read_utf8_string(reader)?;
-                trace!("Extracted Client ID: {:?}", client_id);
-
-                let connect_flags = self.variable_header().connect_flags();
-
-                let mut will_properties: Option<Vec<Property>> = None;
-                let mut will_topic: Option<String> = None;
-                let mut will_payload: Option<Vec<u8>> = None;
-
-                if connect_flags.will_flag() {
-                    let property_decoder = PropertyDecoder::new();
-                    will_properties = Option::from(property_decoder.decode(reader)?);
-                    trace!("Extracted Will Properties: {:?}", will_properties);
-
-                    will_topic = Option::from(self.read_utf8_string(reader)?);
-                    trace!("Extracted Will Topic: {:?}", will_topic);
-
-                    will_payload = Option::from(self.read_binary_data(reader)?);
-                    trace!("Extracted Will Payload: {:?}", will_payload);
-                }
-
-                let mut username: Option<String> = None;
-                if connect_flags.username_flag() {
-                    username = Option::from(self.read_utf8_string(reader)?);
-                    trace!("Extracted Username: {:?}", username);
-                }
-
-                let mut password: Option<String> = None;
-                if connect_flags.password_flag() {
-                    password = Option::from(self.read_utf8_string(reader)?);
-                    trace!("Extracted Password: {:?}", password);
-                }
-
-                Option::from(Payload::from_connect(Some(client_id), will_properties, will_topic, will_payload, username, password))
-            }
-            ControlPacketType::CONNACK => { None }
-            ControlPacketType::PUBLISH => {
-                let mut data = Vec::with_capacity((reader.remaining() / 8) as usize);
-                while data.len() != data.capacity() {
-                    data.push(
-                        match reader.read_u8(8) {
-                            Ok(result) => { result }
-                            Err(err) => {
-                                error!("Can't read payload: {:?}", err);
-                                return match err {
-                                    BitReaderError::NotEnoughData {
-                                        position,
-                                        length,
-                                        requested, } => {
-                                        Err(DecodeError::Payload { cause: ReadError::NotEnoughData { position, length, requested } })
-                                    }
-                                    BitReaderError::TooManyBitsForType {
-                                        position,
-                                        requested,
-                                        allowed, } => {
-                                        Err(DecodeError::Payload { cause: ReadError::TooManyBitsForType { position, requested, allowed } })
-                                    }
-                                };
-                            }
-                        })
-                }
-                Option::from(Payload::from_publish(Option::from(data)))
-            }
-            ControlPacketType::PUBACK => { None }
-            ControlPacketType::PUBREC => { None }
-            ControlPacketType::PUBREL => { None }
-            ControlPacketType::PUBCOMP => { None }
-            ControlPacketType::SUBSCRIBE => {
-                let mut topic_filters = Vec::new();
-                while reader.remaining() != 0 {
-                    let topic_filter = self.read_topic_filter(reader)?;
-                    topic_filters.push(topic_filter);
-                }
-                Option::from(Payload::from_sub_unsub(topic_filters))
-            }
-            ControlPacketType::SUBACK => { None }
-            ControlPacketType::UNSUBSCRIBE => {
-                let mut topic_filters = Vec::new();
-                while reader.remaining() != 0 {
-                    let topic_path = self.read_topic_path(reader)?;
-                    topic_filters.push(TopicFilter::from_unsubscribe(topic_path));
-                }
-                Option::from(Payload::from_sub_unsub(topic_filters))
-            }
-            ControlPacketType::UNSUBACK => { None }
-            ControlPacketType::PINGREQ => { None }
-            ControlPacketType::PINGRESP => { None }
-            ControlPacketType::DISCONNECT => { None }
-            ControlPacketType::AUTH => { None }
-        });
+        unimplemented!();
     }
 }
 

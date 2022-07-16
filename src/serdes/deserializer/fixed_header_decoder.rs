@@ -5,19 +5,20 @@ use bytes::BufMut;
 use log::{debug, error, trace};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::sync::MutexGuard;
+use metered::{*};
 
 use crate::model::fixed_header::{ControlPacketType, FixedHeader};
 use crate::model::qos_level::QoSLevel;
 use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
 use crate::serdes::r#trait::decoder::Decoder;
 
-pub struct FixedHeaderDecoder {}
+#[derive(Default, Debug)]
+pub struct FixedHeaderDecoder {
+    pub(crate) metrics: FixedHeaderDecoderMetrics,
+
+}
 
 impl FixedHeaderDecoder {
-    pub fn new() -> Self {
-        FixedHeaderDecoder {}
-    }
 
     fn read_packet_type(&self, reader: &mut BitReader) -> DecodeResult<ControlPacketType> {
         trace!("FixedHeaderDecoder::read_packet_type");
@@ -133,7 +134,9 @@ impl FixedHeaderDecoder {
     }
 }
 
+#[metered(registry = FixedHeaderDecoderMetrics)]
 impl Decoder<FixedHeader> for FixedHeaderDecoder {
+    #[measure([HitCount, Throughput, InFlight, ResponseTime])]
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<FixedHeader> {
         debug!("FixedHeaderDecoder::decode");
         let packet_type = self.read_packet_type(reader)?;
