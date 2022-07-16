@@ -18,8 +18,8 @@ pub struct Broker {
 #[metered(registry = BrokerMetrics)]
 impl Broker {
 
-    #[tokio::main(flavor = "multi_thread")]
-    //#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+    //#[tokio::main(flavor = "multi_thread")]
+    #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
     //#[tokio::main(flavor = "current_thread")]
     pub async fn handle_packets<'a>(&self,
                                     mut listener2broker: Receiver<(SocketAddr, ControlPacket)>,

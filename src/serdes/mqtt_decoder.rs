@@ -69,19 +69,12 @@ impl MqttDecoder {
                 }
             };
 
-            let _fixed_header = fixed_header.clone();
-            let res: (Option<VariableHeader>, Option<Payload>) = tokio::task::spawn_blocking(move || {
-                let mut reader = BitReader::new(&buffer);
+            let mut reader = BitReader::new(&buffer);
 
-                let variable_header_decoder = VariableHeaderDecoder::new(_fixed_header.clone());
-                let variable_header = variable_header_decoder.decode(&mut reader)?;
-                let payload_decoder = PayloadDecoder::new(_fixed_header.packet_type(), variable_header.clone());
-                let payload = payload_decoder.decode(&mut reader)?;
-                Ok((variable_header, payload))
-            }).await.expect("panic spawn blocking")?;
-
-            variable_header = res.0;
-            payload = res.1;
+            let variable_header_decoder = VariableHeaderDecoder::new(fixed_header.clone());
+            variable_header = variable_header_decoder.decode(&mut reader)?;
+            let payload_decoder = PayloadDecoder::new(fixed_header.packet_type(), variable_header.clone());
+            payload = payload_decoder.decode(&mut reader)?;
         }
 
         let control_packet = ControlPacket::new(fixed_header.deref().to_owned(), variable_header, payload);

@@ -22,8 +22,8 @@ pub struct RxConnectionHandler {
 
 #[metered(registry = RxConnectionHandlerMetrics)]
 impl RxConnectionHandler {
-    #[tokio::main(flavor = "multi_thread")]
-    //#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
+    //#[tokio::main(flavor = "multi_thread")]
+    #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
     //#[tokio::main(flavor = "current_thread")]
     pub async fn handle_incoming_connections(&self, listener2broker: Arc<Sender<(SocketAddr, ControlPacket)>>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) -> Result<(), Box<dyn std::error::Error>> {
         trace!("MQTTListener::process");

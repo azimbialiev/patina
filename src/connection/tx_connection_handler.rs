@@ -30,8 +30,8 @@ pub struct TxConnectionHandler {
 
 #[metered(registry = TxConnectionHandlerMetrics)]
 impl TxConnectionHandler {
-    #[tokio::main(flavor = "multi_thread")]
-    //#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+    //#[tokio::main(flavor = "multi_thread")]
+    #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
     pub async fn handle_outgoing_connections(&self, mut broker2listener: Receiver<(Vec<SocketAddr>, ControlPacket)>, stream_repository: Arc<DashMap<SocketAddr, OwnedWriteHalf>>) -> Result<(), Box<dyn std::error::Error>> {
         let encoder = self.encoder.clone();
         let tx_client_handler = self.tx_client_handler.clone();
