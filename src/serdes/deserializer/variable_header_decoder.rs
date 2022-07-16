@@ -10,11 +10,11 @@ use crate::serdes::deserializer::property_decoder::PropertyDecoder;
 use crate::serdes::r#trait::decoder::Decoder;
 
 pub struct VariableHeaderDecoder {
-    fixed_header: FixedHeader,
+    fixed_header: Box<FixedHeader>,
 }
 
 impl VariableHeaderDecoder {
-    pub fn new(fixed_header: FixedHeader) -> Self {
+    pub fn new(fixed_header: Box<FixedHeader>) -> Self {
         VariableHeaderDecoder { fixed_header }
     }
 }

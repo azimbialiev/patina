@@ -5,7 +5,6 @@ use log::info;
 use warp::Filter;
 
 use crate::{Broker, RxConnectionHandler, ServiceMetricRegistry, TxConnectionHandler};
-use crate::session::session_handler::SessionHandler;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 pub async fn start_metrics_server(

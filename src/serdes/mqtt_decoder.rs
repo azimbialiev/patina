@@ -1,4 +1,3 @@
-use std::cell::{RefCell, UnsafeCell};
 use std::io::ErrorKind;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -9,51 +8,35 @@ use log::{debug, error, trace};
 use metered::{*};
 use nameof::name_of_type;
 use serde::Serializer;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::Mutex;
 
 use crate::model::control_packet::ControlPacket;
+use crate::model::payload::Payload;
+use crate::model::variable_header::VariableHeader;
 use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError};
 use crate::serdes::deserializer::fixed_header_decoder::FixedHeaderDecoder;
 use crate::serdes::deserializer::payload_decoder::PayloadDecoder;
 use crate::serdes::deserializer::variable_header_decoder::VariableHeaderDecoder;
 use crate::serdes::r#trait::decoder::Decoder;
 
-#[derive(Default, Clone, Debug)]
-pub struct MqttDecoder(Arc<MqttDecoderImpl>);
 
-impl Deref for MqttDecoder {
-    type Target = MqttDecoderImpl;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-
-impl serde::Serialize for MqttDecoder{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        return self.deref().serialize(serializer);
-    }
-}
 
 #[derive(Default, Debug)]
-#[derive(serde::Serialize)]
-pub struct MqttDecoderImpl {
+pub struct MqttDecoder {
     pub(crate) metrics: MqttDecoderMetrics,
 
 }
 
 #[metered(registry = MqttDecoderMetrics)]
-impl MqttDecoderImpl {
+impl MqttDecoder {
 
     #[measure([HitCount, Throughput, InFlight, ResponseTime])]
-    pub(crate) async fn decode_packet(&self, mut stream: Arc<Mutex<OwnedReadHalf>>) -> DecodeResult<ControlPacket> {
-        debug!("{}::decode_packet", name_of_type!(MqttDecoder));
-        let mut stream = stream.lock().await;
+    pub(crate) async fn decode_packet(&self, mut stream: OwnedReadHalf) -> DecodeResult<(OwnedReadHalf, ControlPacket)> {
+        debug!("START decode_packet");
         let fixed_header_decoder = FixedHeaderDecoder::new();
-        let fixed_header = fixed_header_decoder.decode_from_stream(&mut stream).await?;
+        let fixed_header = Box::new(fixed_header_decoder.decode_from_stream(&mut stream).await?);
 
         let mut buffer = BytesMut::with_capacity(fixed_header.remaining_length() as usize);
         debug!("Remaining packet length: {:?}", fixed_header.remaining_length());
@@ -86,16 +69,23 @@ impl MqttDecoderImpl {
                 }
             };
 
-            let mut reader = BitReader::new(buffer.as_ref());
+            let _fixed_header = fixed_header.clone();
+            let res: (Option<VariableHeader>, Option<Payload>) = tokio::task::spawn_blocking(move || {
+                let mut reader = BitReader::new(&buffer);
 
-            let variable_header_decoder = VariableHeaderDecoder::new(fixed_header.clone());
-            variable_header = variable_header_decoder.decode(&mut reader)?;
-            let payload_decoder = PayloadDecoder::new(fixed_header.packet_type(), variable_header.clone());
-            payload = payload_decoder.decode(&mut reader)?;
+                let variable_header_decoder = VariableHeaderDecoder::new(_fixed_header.clone());
+                let variable_header = variable_header_decoder.decode(&mut reader)?;
+                let payload_decoder = PayloadDecoder::new(_fixed_header.packet_type(), variable_header.clone());
+                let payload = payload_decoder.decode(&mut reader)?;
+                Ok((variable_header, payload))
+            }).await.expect("panic spawn blocking")?;
+
+            variable_header = res.0;
+            payload = res.1;
         }
 
-        let control_packet = ControlPacket::new(fixed_header, variable_header, payload);
+        let control_packet = ControlPacket::new(fixed_header.deref().to_owned(), variable_header, payload);
         debug!("ControlPacket: {:?}", control_packet);
-        return Ok(control_packet);
+        return Ok((stream, control_packet));
     }
 }

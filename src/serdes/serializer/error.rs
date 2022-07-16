@@ -1,5 +1,4 @@
-use core::{fmt};
-
+use core::fmt;
 
 pub type EncodeResult<T> = Result<T, EncodeError>;
 

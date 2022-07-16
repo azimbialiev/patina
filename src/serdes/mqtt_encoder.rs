@@ -1,16 +1,19 @@
 use std::ops::Deref;
 use std::sync::Arc;
+
 use bytes::BytesMut;
-use log::{debug, error, trace};
+use log::{debug, trace};
 use metered::{*};
 use nameof::name_of_type;
 use serde::Serializer;
+
 use crate::model::control_packet::ControlPacket;
 use crate::serdes::r#trait::encoder::{Encoder, LengthCalculator, OptEncoder};
 use crate::serdes::serializer::error::EncodeResult;
 use crate::serdes::serializer::fixed_header_encoder::FixedHeaderEncoder;
 use crate::serdes::serializer::payload_encoder::PayloadEncoder;
 use crate::serdes::serializer::variable_header_encoder::VariableHeaderEncoder;
+
 #[derive(Default, Clone, Debug)]
 pub struct MqttEncoder(Arc<MqttEncoderImpl>);
 

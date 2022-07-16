@@ -1,10 +1,9 @@
-use std::cell::RefCell;
 use std::io::ErrorKind;
 
 use bitreader::BitReader;
 use bytes::BufMut;
 use log::{debug, error, trace};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::MutexGuard;
 

@@ -1,10 +1,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+
 use dashmap::DashMap;
+use log::{error, info, trace, warn};
 use metered::{*};
-
-
-use log::{debug, error, info, trace, warn};
 
 #[derive(Debug)]
 pub struct ClientHandler {

@@ -1,7 +1,7 @@
 use bitreader::{BitReader, BitReaderError};
 use log::{error, trace};
-use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError, ReadResult};
 
+use crate::serdes::deserializer::error::{DecodeError, DecodeResult, ReadError, ReadResult};
 
 pub trait Decoder<T> {
     fn decode(&self, reader: &mut BitReader) -> DecodeResult<T>;

@@ -1,10 +1,10 @@
-use std::borrow::BorrowMut;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
-use dashmap::{DashMap, DashSet};
+
+use dashmap::DashMap;
+use log::trace;
 use metered::{*};
-use log::{debug, trace};
 
 #[derive(Debug)]
 pub struct TopicHandler {

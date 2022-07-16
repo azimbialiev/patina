@@ -1,17 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use chrono::Local;
-use serde::Serializer;
-use log::{debug, error, info, trace, warn};
+
+use log::debug;
 use metered::{*};
-use rand::Rng;
-use crate::model::control_packet::ControlPacket;
-use crate::model::fixed_header::ControlPacketType;
-use crate::model::qos_level::QoSLevel;
-use crate::model::reason_code::ReasonCode;
-use crate::session::session_handler::{SessionHandler, SessionState};
-use dashmap::DashMap;
 use tokio::sync::mpsc::Sender;
+
 use crate::{ClientHandler, TopicHandler};
 use crate::broker::handler::connect_handler::ConnectHandler;
 use crate::broker::handler::disconnect_handler::DisconnectHandler;
@@ -21,12 +14,13 @@ use crate::broker::handler::pubrec_handler::PubrecHandler;
 use crate::broker::handler::pubrel_handler::PubrelHandler;
 use crate::broker::handler::subscribe_handler::SubscribeHandler;
 use crate::broker::handler::unsubscribe_handler::UnsubscribeHandler;
-
+use crate::model::control_packet::ControlPacket;
+use crate::model::fixed_header::ControlPacketType;
 
 #[derive(Debug)]
 pub struct PacketDispatcher {
     pub(crate) metrics: PacketDispatcherMetrics,
-    to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>,
+    to_listener: Arc<Sender<(Vec<SocketAddr>, ControlPacket)>>,
     pub(crate) client_handler: Arc<ClientHandler>,
     pub(crate) topic_handler: Arc<TopicHandler>,
     pub(crate) connect_handler: Arc<ConnectHandler>,
@@ -87,7 +81,7 @@ impl PacketDispatcher {
         };
         Ok(())
     }
-    pub fn new(client_handler: Arc<ClientHandler>, topic_handler: Arc<TopicHandler>, to_listener: Sender<(Vec<SocketAddr>, ControlPacket)>) -> Self {
+    pub fn new(client_handler: Arc<ClientHandler>, topic_handler: Arc<TopicHandler>, to_listener: Arc<Sender<(Vec<SocketAddr>, ControlPacket)>>) -> Self {
         Self {
             metrics: PacketDispatcherMetrics::default(),
             to_listener: to_listener.clone(),

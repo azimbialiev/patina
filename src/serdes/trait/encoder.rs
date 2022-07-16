@@ -1,8 +1,7 @@
-
 use bytes::{BufMut, BytesMut};
 use log::trace;
-use crate::serdes::serializer::error::{EncodeError, EncodeResult};
 
+use crate::serdes::serializer::error::{EncodeError, EncodeResult};
 
 pub trait LengthCalculator<T>: Encoder<T> {
     fn calculate_length(&mut self, item: &T) -> usize {

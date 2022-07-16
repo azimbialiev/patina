@@ -1,9 +1,9 @@
 use dashmap::DashMap;
 use log::trace;
+use metered::{*};
 
 use crate::model::control_packet::ControlPacket;
 use crate::model::qos_level::QoSLevel;
-use metered::{*};
 
 pub enum SessionState {
     SessionPresent,

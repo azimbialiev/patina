@@ -8,20 +8,26 @@ root:
   appenders:
     - stdout
 loggers:
-  patina::broker:
-    level: info
-  patina::connection:
-    level: info
-  patina::metrics:
-    level: info
-  patina::serdes:
-    level: info
-  patina::session:
-    level: info
-  patina::tests:
-    level: info
-  patina::topic:
-    level: info
+#  patina::broker:
+#    level: info
+  patina::broker::handler::publish_handler:
+    level: error
+  patina::broker::handler::connect_handler:
+    level: error
+  patina::broker::handler::subscribe_handler:
+    level: error
+#  patina::connection:
+#    level: info
+#  patina::metrics:
+#    level: info
+#  patina::serdes:
+#    level: error
+#  patina::session:
+#    level: info
+#  patina::tests:
+#    level: info
+#  patina::topic:
+#    level: info
   mio::poll:
     level: info
   hyper:
